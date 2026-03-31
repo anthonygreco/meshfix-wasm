@@ -1,0 +1,1030 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>meshfix-wasm Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #222; }
+    h1 { margin-bottom: 8px; }
+    h2 { margin: 20px 0 8px; font-size: 1.1em; color: #555; }
+    #status { margin-bottom: 20px; padding: 8px 12px; border-radius: 4px; font-weight: 600; }
+    .status-loading { background: #fff3cd; color: #856404; }
+    .status-ready { background: #d4edda; color: #155724; }
+    .status-error { background: #f8d7da; color: #721c24; }
+    .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; background: #0066cc; color: white; cursor: pointer; font-size: 14px; }
+    button:hover { background: #0055aa; }
+    button:disabled { background: #999; cursor: not-allowed; }
+    .repair-controls {
+      display: flex; gap: 10px; align-items: center; margin-bottom: 20px; flex-wrap: wrap;
+      padding: 12px 16px; background: #f8f9fa; border-radius: 6px; border: 1px solid #dee2e6;
+    }
+    .repair-controls label { font-weight: 600; font-size: 14px; }
+    .repair-controls input[type="number"] {
+      width: 100px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+    }
+    #weld-result {
+      display: none; margin-bottom: 16px; padding: 10px 14px; border-radius: 4px;
+      background: #d4edda; color: #155724; font-weight: 600; font-size: 14px;
+    }
+    #drop-zone {
+      border: 3px dashed #ccc; border-radius: 8px; padding: 40px; text-align: center;
+      color: #888; margin-bottom: 20px; transition: all 0.2s;
+    }
+    #drop-zone.dragover { border-color: #0066cc; background: #f0f7ff; color: #0066cc; }
+    .stats-table { width: 100%; border-collapse: collapse; display: none; margin-bottom: 10px; }
+    .stats-table th, .stats-table td { text-align: left; padding: 6px 12px; border-bottom: 1px solid #eee; }
+    .stats-table th { background: #f5f5f5; font-weight: 600; width: 40%; }
+    #error-msg { color: #c00; margin: 10px 0; display: none; }
+    #issues-section { display: none; margin-top: 10px; }
+    .issue-badge {
+      display: inline-block; padding: 4px 10px; border-radius: 12px;
+      font-size: 13px; font-weight: 600; margin: 3px 4px 3px 0;
+    }
+    .badge-error { background: #f8d7da; color: #721c24; }
+    .badge-warning { background: #fff3cd; color: #856404; }
+    .badge-info { background: #d1ecf1; color: #0c5460; }
+    .no-issues {
+      padding: 10px 16px; border-radius: 4px; background: #d4edda; color: #155724;
+      font-weight: 600; display: none;
+    }
+  </style>
+  <script type="importmap">
+  { "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+  }}
+  </script>
+</head>
+<body>
+  <h1>meshfix-wasm Test Page</h1>
+  <div id="status" class="status-loading">Loading WASM module...</div>
+
+  <div class="repair-controls" style="background:#e3f2fd; border-color:#90caf9;">
+    <label style="cursor:pointer;">
+      <input type="checkbox" id="debug-mode"> Debug Mode
+    </label>
+    <span id="worker-status" style="font-size:13px; color:#555;">Off — operations run in Web Worker</span>
+  </div>
+
+  <div class="controls">
+    <button id="btn-icosphere" disabled>Test Icosphere</button>
+    <button id="btn-torus" disabled>Test Torus</button>
+    <button id="btn-tetrahedron" disabled>Test Tetrahedron</button>
+    <button id="btn-bowtie" disabled>Test Bowtie</button>
+  </div>
+
+  <div class="repair-controls">
+    <label>Epsilon:</label>
+    <input type="number" id="weld-epsilon" value="0.00001" step="0.00001" min="0">
+    <button id="btn-weld" disabled>Weld Vertices</button>
+  </div>
+
+  <div class="repair-controls">
+    <label>Min Area:</label>
+    <input type="number" id="degen-min-area" value="1e-10" step="1e-10" min="0">
+    <button id="btn-remove-degen" disabled>Remove Degenerates</button>
+  </div>
+
+  <div class="repair-controls">
+    <button id="btn-fix-normals" disabled>Fix Normals</button>
+  </div>
+
+  <div class="repair-controls">
+    <button id="btn-split-verts" disabled>Split Non-Manifold Vertices</button>
+  </div>
+
+  <div class="repair-controls">
+    <label>Max Edges:</label>
+    <input type="number" id="fill-max-edges" value="100" step="1" min="1">
+    <button id="btn-fill-holes" disabled>Fill Holes</button>
+  </div>
+
+  <div class="repair-controls" style="background:#e8f5e9; border-color:#a5d6a7;">
+    <button id="btn-repair" disabled style="background:#2e7d32; font-weight:700;">Auto Repair</button>
+    <span style="font-size:13px; color:#555;">Runs: weld &rarr; remove degenerates &rarr; split vertices &rarr; fill holes &rarr; fix normals</span>
+  </div>
+
+  <div class="repair-controls" style="background:#e3f2fd; border-color:#90caf9;">
+    <label>Format:</label>
+    <select id="export-format" style="padding:6px 8px; border:1px solid #ccc; border-radius:4px; font-size:14px;">
+      <option value="stl" selected>STL</option>
+      <option value="obj">OBJ</option>
+      <option value="off">OFF</option>
+    </select>
+    <button id="btn-download" disabled style="background:#1565c0; font-weight:700;">Download</button>
+    <span style="font-size:13px; color:#555;">Export current mesh</span>
+  </div>
+
+  <div id="repair-result" style="display:none; margin-bottom:16px; padding:12px 16px; border-radius:4px; background:#d4edda; color:#155724; font-weight:600; font-size:14px; white-space:pre-line;"></div>
+  <div id="weld-result"></div>
+  <div id="degen-result" style="display:none; margin-bottom:16px; padding:10px 14px; border-radius:4px; background:#d4edda; color:#155724; font-weight:600; font-size:14px;"></div>
+  <div id="normals-result" style="display:none; margin-bottom:16px; padding:10px 14px; border-radius:4px; background:#d4edda; color:#155724; font-weight:600; font-size:14px;"></div>
+  <div id="split-result" style="display:none; margin-bottom:16px; padding:10px 14px; border-radius:4px; background:#d4edda; color:#155724; font-weight:600; font-size:14px;"></div>
+  <div id="fill-result" style="display:none; margin-bottom:16px; padding:10px 14px; border-radius:4px; background:#d4edda; color:#155724; font-weight:600; font-size:14px;"></div>
+
+  <div id="drop-zone">Drop an STL, OBJ, or OFF file here</div>
+
+  <div id="viewport-section" style="display:none">
+    <h2>3D Preview</h2>
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+      <label><input type="checkbox" id="wireframe-toggle"> Wireframe</label>
+      <label><input type="checkbox" id="overlay-toggle"> Issue Overlay</label>
+      <button id="btn-toggle-original" style="display:none; padding:4px 12px; font-size:13px; background:#6c757d;">Show Original</button>
+    </div>
+    <div id="overlay-legend" style="display:none; margin-bottom:8px; font-size:12px; line-height:1.8;">
+      <span style="display:inline-block; width:14px; height:14px; background:#ff3333; border-radius:2px; vertical-align:middle;"></span> Non-manifold&nbsp;&nbsp;
+      <span style="display:inline-block; width:14px; height:14px; background:#ff8800; border-radius:2px; vertical-align:middle;"></span> Degenerate&nbsp;&nbsp;
+      <span style="display:inline-block; width:14px; height:14px; background:#ff00ff; border-radius:2px; vertical-align:middle;"></span> Duplicate&nbsp;&nbsp;
+      <span style="display:inline-block; width:14px; height:14px; background:#ffff00; border-radius:2px; vertical-align:middle;"></span> Flipped&nbsp;&nbsp;
+      <span style="display:inline-block; width:14px; height:14px; background:#00ccff; border-radius:2px; vertical-align:middle;"></span> Boundary&nbsp;&nbsp;
+      <span style="display:inline-block; width:14px; height:14px; background:#4a90d9; border-radius:2px; vertical-align:middle;"></span> Clean
+    </div>
+    <div id="viewport-container" style="width:100%; height:400px; border:1px solid #ddd; border-radius:6px; overflow:hidden; position:relative;">
+      <canvas id="viewport" style="display:block;"></canvas>
+    </div>
+  </div>
+
+  <div id="error-msg"></div>
+
+  <h2 id="geom-heading" style="display:none">Geometry</h2>
+  <table class="stats-table" id="stats-table">
+    <tr><th>Property</th><th>Value</th></tr>
+    <tr><td>Vertices</td><td id="stat-vertices">-</td></tr>
+    <tr><td>Faces</td><td id="stat-faces">-</td></tr>
+    <tr><td>Edges</td><td id="stat-edges">-</td></tr>
+    <tr><td>Bounding Box Min</td><td id="stat-bbmin">-</td></tr>
+    <tr><td>Bounding Box Max</td><td id="stat-bbmax">-</td></tr>
+    <tr><td>Dimensions</td><td id="stat-dims">-</td></tr>
+    <tr><td>Surface Area</td><td id="stat-area">-</td></tr>
+    <tr><td>Volume</td><td id="stat-volume">-</td></tr>
+    <tr><td>Boundary Edges</td><td id="stat-boundary">-</td></tr>
+    <tr><td>Triangle Mesh</td><td id="stat-tri">-</td></tr>
+    <tr id="stat-skipped-row" style="display:none"><td>Skipped Faces</td><td id="stat-skipped">-</td></tr>
+  </table>
+
+  <h2 id="topo-heading" style="display:none">Topology</h2>
+  <table class="stats-table" id="topo-table">
+    <tr><th>Property</th><th>Value</th></tr>
+    <tr><td>Manifold</td><td id="topo-manifold">-</td></tr>
+    <tr><td>Watertight</td><td id="topo-watertight">-</td></tr>
+    <tr><td>Euler Characteristic</td><td id="topo-euler">-</td></tr>
+    <tr><td>Genus</td><td id="topo-genus">-</td></tr>
+    <tr><td>Connected Components</td><td id="topo-components">-</td></tr>
+    <tr><td>Boundary Loops</td><td id="topo-loops">-</td></tr>
+  </table>
+
+  <div id="issues-section">
+    <h2>Issues</h2>
+    <div class="no-issues" id="no-issues">No issues detected - mesh looks clean!</div>
+    <div id="issues-list"></div>
+  </div>
+
+  <div id="warn-msg" style="display:none; margin-top:10px; padding:8px 12px; border-radius:4px; background:#fff3cd; color:#856404;"></div>
+
+  <script src="../dist/meshfix-core.js"></script>
+  <script type="module">
+    import { MeshFixWorker } from "../dist/index.js";
+    import { Scene, PerspectiveCamera, WebGLRenderer, Mesh as ThreeMesh, BufferGeometry, BufferAttribute, Float32BufferAttribute, MeshStandardMaterial, DirectionalLight, AmbientLight, Color, Box3, Vector3, DoubleSide } from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+    // --- Three.js scene setup ---
+    const viewportSection = document.getElementById('viewport-section');
+    const viewportContainer = document.getElementById('viewport-container');
+    const canvas = document.getElementById('viewport');
+    const wireframeToggle = document.getElementById('wireframe-toggle');
+
+    const scene = new Scene();
+    scene.background = new Color(0xf0f0f0);
+    const camera = new PerspectiveCamera(50, 2, 0.01, 1000);
+    camera.position.set(0, 0, 3);
+    const renderer = new WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    const ambientLight = new AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const dirLight = new DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(5, 5, 5);
+    scene.add(dirLight);
+    const dirLight2 = new DirectionalLight(0xffffff, 0.3);
+    dirLight2.position.set(-3, -2, -4);
+    scene.add(dirLight2);
+
+    let currentMesh = null;
+    const material = new MeshStandardMaterial({ color: 0x4a90d9, flatShading: true, side: DoubleSide });
+    const overlayMaterial = new MeshStandardMaterial({ vertexColors: true, flatShading: true, side: DoubleSide });
+
+    // Overlay state
+    let overlayActive = false;
+    let currentRenderData = null;
+    let currentIndexedGeometry = null;
+
+    // Before/after state
+    let originalRenderData = null;
+    let showingOriginal = false;
+    let hasRepaired = false;
+
+    // Flag color map (priority order: highest flag wins)
+    const FLAG_COLORS = {
+      0x10: new Color(0xff3333), // non-manifold — red
+      0x01: new Color(0xff8800), // degenerate — orange
+      0x02: new Color(0xff00ff), // duplicate — magenta
+      0x04: new Color(0xffff00), // flipped — yellow
+      0x08: new Color(0x00ccff), // boundary — cyan
+    };
+    const CLEAN_COLOR = new Color(0x4a90d9);
+
+    function resizeRenderer() {
+      const w = viewportContainer.clientWidth;
+      const h = viewportContainer.clientHeight;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    wireframeToggle.addEventListener('change', () => {
+      material.wireframe = wireframeToggle.checked;
+      overlayMaterial.wireframe = wireframeToggle.checked;
+    });
+
+    window.addEventListener('resize', () => {
+      if (viewportSection.style.display !== 'none') resizeRenderer();
+    });
+
+    function getFaceColor(flags) {
+      // Priority: highest bit wins
+      for (const [bit, color] of Object.entries(FLAG_COLORS)) {
+        if (flags & parseInt(bit)) return color;
+      }
+      return CLEAN_COLOR;
+    }
+
+    function buildOverlayGeometry(renderData) {
+      const geo = new BufferGeometry();
+      geo.setAttribute('position', new BufferAttribute(renderData.positions, 3));
+      geo.setAttribute('normal', new BufferAttribute(renderData.normals, 3));
+      geo.setIndex(new BufferAttribute(renderData.indices, 1));
+
+      // Expand to non-indexed for per-face vertex colors
+      const nonIndexed = geo.toNonIndexed();
+      geo.dispose();
+
+      const vertCount = nonIndexed.getAttribute('position').count;
+      const colors = new Float32Array(vertCount * 3);
+      const faceFlags = renderData.faceFlags;
+
+      for (let fi = 0; fi < faceFlags.length; fi++) {
+        const color = getFaceColor(faceFlags[fi]);
+        for (let vi = 0; vi < 3; vi++) {
+          const idx = fi * 3 + vi;
+          colors[idx * 3] = color.r;
+          colors[idx * 3 + 1] = color.g;
+          colors[idx * 3 + 2] = color.b;
+        }
+      }
+      nonIndexed.setAttribute('color', new Float32BufferAttribute(colors, 3));
+      return nonIndexed;
+    }
+
+    function showViewport(renderData, fitCamera = true) {
+      viewportSection.style.display = '';
+      resizeRenderer();
+
+      if (currentMesh) {
+        scene.remove(currentMesh);
+        currentMesh.geometry.dispose();
+        currentMesh = null;
+      }
+      currentIndexedGeometry = null;
+
+      const geo = new BufferGeometry();
+      geo.setAttribute('position', new BufferAttribute(renderData.positions, 3));
+      geo.setAttribute('normal', new BufferAttribute(renderData.normals, 3));
+      geo.setIndex(new BufferAttribute(renderData.indices, 1));
+      currentIndexedGeometry = geo;
+
+      if (overlayActive && renderData.faceFlags) {
+        const overlayGeo = buildOverlayGeometry(renderData);
+        currentMesh = new ThreeMesh(overlayGeo, overlayMaterial);
+      } else {
+        currentMesh = new ThreeMesh(geo, material);
+      }
+      scene.add(currentMesh);
+
+      if (fitCamera) {
+        // Fit camera to bounding box
+        const posAttr = currentMesh.geometry.getAttribute('position');
+        const box = new Box3().setFromBufferAttribute(posAttr);
+        const center = new Vector3();
+        box.getCenter(center);
+        const size = new Vector3();
+        box.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const dist = maxDim / (2 * Math.tan(camera.fov * Math.PI / 360));
+
+        camera.position.copy(center);
+        camera.position.z += dist * 1.5;
+        controls.target.copy(center);
+        camera.near = maxDim * 0.001;
+        camera.far = maxDim * 100;
+        camera.updateProjectionMatrix();
+        controls.update();
+      }
+    }
+
+    function parseRenderDataBuffer(buf) {
+      const view = new DataView(buf);
+      const vertexCount = view.getUint32(0, true);
+      const indexCount = view.getUint32(4, true);
+      const posOffset = 8;
+      const normOffset = posOffset + vertexCount * 3 * 4;
+      const idxOffset = normOffset + vertexCount * 3 * 4;
+      const flagsOffset = idxOffset + indexCount * 4;
+      const faceCount = indexCount / 3;
+      return {
+        positions: new Float32Array(buf, posOffset, vertexCount * 3),
+        normals: new Float32Array(buf, normOffset, vertexCount * 3),
+        indices: new Uint32Array(buf, idxOffset, indexCount),
+        faceFlags: new Uint8Array(buf, flagsOffset, faceCount),
+      };
+    }
+
+    async function updateViewport(fitCamera = true) {
+      try {
+        let renderData;
+        if (useWorker && workerInstance) {
+          renderData = await workerInstance.toRenderData();
+        } else if (analyzer && analyzer.isLoaded()) {
+          const path = '/tmp/render.bin';
+          try {
+            const ok = analyzer.writeRenderData(path);
+            if (!ok) return;
+            const data = module.FS.readFile(path);
+            const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+            renderData = parseRenderDataBuffer(buf);
+          } finally {
+            try { module.FS.unlink(path); } catch {}
+          }
+        } else {
+          return;
+        }
+        currentRenderData = renderData;
+        showViewport(renderData, fitCamera);
+      } catch (e) {
+        console.warn('Viewport update failed:', e);
+      }
+    }
+
+    let module = null;
+    let analyzer = null;
+    let workerInstance = null;
+    let useWorker = true;
+
+    const debugModeCheckbox = document.getElementById('debug-mode');
+    const workerStatusEl = document.getElementById('worker-status');
+
+    debugModeCheckbox.addEventListener('change', async () => {
+      if (debugModeCheckbox.checked) {
+        // Debug mode on — use main thread
+        if (!module) {
+          workerStatusEl.textContent = 'Initializing main thread...';
+          try {
+            module = await createMeshFixCore();
+            analyzer = new module.MeshAnalyzer();
+          } catch (e) {
+            debugModeCheckbox.checked = false;
+            workerStatusEl.textContent = 'Failed: ' + e.message;
+            return;
+          }
+        }
+        useWorker = false;
+        workerStatusEl.textContent = 'On — operations run on main thread (for debugging)';
+      } else {
+        useWorker = true;
+        workerStatusEl.textContent = 'Off — operations run in Web Worker';
+      }
+    });
+
+    const statusEl = document.getElementById('status');
+    const statsTable = document.getElementById('stats-table');
+    const topoTable = document.getElementById('topo-table');
+    const errorEl = document.getElementById('error-msg');
+    const dropZone = document.getElementById('drop-zone');
+    const issuesSection = document.getElementById('issues-section');
+    const issuesList = document.getElementById('issues-list');
+    const noIssues = document.getElementById('no-issues');
+    const buttons = {
+      icosphere: document.getElementById('btn-icosphere'),
+      torus: document.getElementById('btn-torus'),
+      tetrahedron: document.getElementById('btn-tetrahedron'),
+      bowtie: document.getElementById('btn-bowtie'),
+    };
+    const weldBtn = document.getElementById('btn-weld');
+    const weldEpsilonInput = document.getElementById('weld-epsilon');
+    const weldResultEl = document.getElementById('weld-result');
+    const degenBtn = document.getElementById('btn-remove-degen');
+    const degenMinAreaInput = document.getElementById('degen-min-area');
+    const degenResultEl = document.getElementById('degen-result');
+    const fixNormalsBtn = document.getElementById('btn-fix-normals');
+    const normalsResultEl = document.getElementById('normals-result');
+    const splitVertsBtn = document.getElementById('btn-split-verts');
+    const splitResultEl = document.getElementById('split-result');
+    const fillHolesBtn = document.getElementById('btn-fill-holes');
+    const fillMaxEdgesInput = document.getElementById('fill-max-edges');
+    const fillResultEl = document.getElementById('fill-result');
+    const repairBtn = document.getElementById('btn-repair');
+    const repairResultEl = document.getElementById('repair-result');
+    const downloadBtn = document.getElementById('btn-download');
+    const exportFormatSelect = document.getElementById('export-format');
+    const overlayToggle = document.getElementById('overlay-toggle');
+    const overlayLegend = document.getElementById('overlay-legend');
+    const toggleOriginalBtn = document.getElementById('btn-toggle-original');
+
+    // Overlay toggle handler
+    overlayToggle.addEventListener('change', () => {
+      overlayActive = overlayToggle.checked;
+      overlayLegend.style.display = overlayActive ? '' : 'none';
+      const rd = showingOriginal ? originalRenderData : currentRenderData;
+      if (rd) showViewport(rd, false);
+    });
+
+    // Before/after toggle handler
+    toggleOriginalBtn.addEventListener('click', () => {
+      if (!originalRenderData || !currentRenderData) return;
+      showingOriginal = !showingOriginal;
+      toggleOriginalBtn.textContent = showingOriginal ? 'Show Repaired' : 'Show Original';
+      toggleOriginalBtn.style.background = showingOriginal ? '#d9534f' : '#6c757d';
+      const rd = showingOriginal ? originalRenderData : currentRenderData;
+      showViewport(rd, false);
+    });
+
+    function resetBeforeAfter() {
+      originalRenderData = null;
+      showingOriginal = false;
+      hasRepaired = false;
+      toggleOriginalBtn.style.display = 'none';
+      toggleOriginalBtn.textContent = 'Show Original';
+      toggleOriginalBtn.style.background = '#6c757d';
+    }
+
+    function showBeforeAfterToggle() {
+      if (originalRenderData) {
+        hasRepaired = true;
+        showingOriginal = false;
+        toggleOriginalBtn.style.display = '';
+        toggleOriginalBtn.textContent = 'Show Original';
+        toggleOriginalBtn.style.background = '#6c757d';
+      }
+    }
+
+    function fmt(n) {
+      return typeof n === 'number' ? (Number.isInteger(n) ? n.toLocaleString() : n.toFixed(4)) : n;
+    }
+
+    function boolStr(b) { return b ? 'Yes' : 'No'; }
+
+    function buildIssues(a) {
+      const issues = [];
+      if (a.nonManifoldVertexCount > 0)
+        issues.push({ severity: 'error', count: a.nonManifoldVertexCount, message: a.nonManifoldVertexCount + ' non-manifold vertex(es)' });
+      if (a.nonManifoldEdgeCount > 0)
+        issues.push({ severity: 'error', count: a.nonManifoldEdgeCount, message: a.nonManifoldEdgeCount + ' non-manifold edge(s) (faces skipped on import)' });
+      if (a.flippedNormalCount > 0)
+        issues.push({ severity: 'warning', count: a.flippedNormalCount, message: a.flippedNormalCount + ' face(s) with flipped normals' });
+      if (a.degenerateTriangleCount > 0)
+        issues.push({ severity: 'warning', count: a.degenerateTriangleCount, message: a.degenerateTriangleCount + ' degenerate triangle(s)' });
+      if (a.holeCount > 0)
+        issues.push({ severity: 'warning', count: a.holeCount, message: a.holeCount + ' hole(s) found' });
+      if (a.duplicateFaceCount > 0)
+        issues.push({ severity: 'warning', count: a.duplicateFaceCount, message: a.duplicateFaceCount + ' duplicate face(s)' });
+      if (a.isolatedVertexCount > 0)
+        issues.push({ severity: 'info', count: a.isolatedVertexCount, message: a.isolatedVertexCount + ' isolated vertex(es)' });
+      if (!a.isWatertight)
+        issues.push({ severity: 'info', count: a.boundaryEdges, message: 'Not watertight (' + a.boundaryEdges + ' boundary edges)' });
+      if (a.connectedComponents > 1)
+        issues.push({ severity: 'info', count: a.connectedComponents, message: a.connectedComponents + ' disconnected components' });
+      return issues;
+    }
+
+    function showAnalysis(a) {
+      errorEl.style.display = 'none';
+
+      // Geometry
+      document.getElementById('geom-heading').style.display = '';
+      statsTable.style.display = 'table';
+      document.getElementById('stat-vertices').textContent = fmt(a.vertexCount);
+      document.getElementById('stat-faces').textContent = fmt(a.faceCount);
+      document.getElementById('stat-edges').textContent = fmt(a.edgeCount);
+      document.getElementById('stat-bbmin').textContent = '(' + fmt(a.bboxMinX) + ', ' + fmt(a.bboxMinY) + ', ' + fmt(a.bboxMinZ) + ')';
+      document.getElementById('stat-bbmax').textContent = '(' + fmt(a.bboxMaxX) + ', ' + fmt(a.bboxMaxY) + ', ' + fmt(a.bboxMaxZ) + ')';
+      document.getElementById('stat-dims').textContent = fmt(a.dimX) + ' x ' + fmt(a.dimY) + ' x ' + fmt(a.dimZ);
+      document.getElementById('stat-area').textContent = fmt(a.surfaceArea);
+      document.getElementById('stat-volume').textContent = fmt(a.volume);
+      document.getElementById('stat-boundary').textContent = fmt(a.boundaryEdges);
+      document.getElementById('stat-tri').textContent = a.isTriangleMesh ? 'Yes' : 'No';
+      const skippedRow = document.getElementById('stat-skipped-row');
+      if (a.skippedFaces > 0) {
+        document.getElementById('stat-skipped').textContent = fmt(a.skippedFaces);
+        skippedRow.style.display = '';
+      } else {
+        skippedRow.style.display = 'none';
+      }
+
+      // Topology
+      document.getElementById('topo-heading').style.display = '';
+      topoTable.style.display = 'table';
+      document.getElementById('topo-manifold').textContent = boolStr(a.isManifold);
+      document.getElementById('topo-watertight').textContent = boolStr(a.isWatertight);
+      document.getElementById('topo-euler').textContent = fmt(a.eulerCharacteristic);
+      document.getElementById('topo-genus').textContent = a.genus >= 0 ? fmt(a.genus) : 'N/A (open mesh)';
+      document.getElementById('topo-components').textContent = fmt(a.connectedComponents);
+      document.getElementById('topo-loops').textContent = fmt(a.boundaryLoops);
+
+      // Issues
+      const issues = buildIssues(a);
+      issuesSection.style.display = 'block';
+      issuesList.innerHTML = '';
+      if (issues.length === 0) {
+        noIssues.style.display = 'block';
+      } else {
+        noIssues.style.display = 'none';
+        issues.forEach(function(issue) {
+          var badge = document.createElement('span');
+          badge.className = 'issue-badge badge-' + issue.severity;
+          badge.textContent = issue.message;
+          issuesList.appendChild(badge);
+        });
+      }
+
+      // Warning for skipped faces
+      const warnEl = document.getElementById('warn-msg');
+      if (a.skippedFaces > 0) {
+        warnEl.textContent = a.skippedFaces + ' non-manifold face(s) were skipped during import. The mesh may have topology issues.';
+        warnEl.style.display = 'block';
+      } else {
+        warnEl.style.display = 'none';
+      }
+    }
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.style.display = 'block';
+      statsTable.style.display = 'none';
+      topoTable.style.display = 'none';
+      issuesSection.style.display = 'none';
+      document.getElementById('geom-heading').style.display = 'none';
+      document.getElementById('topo-heading').style.display = 'none';
+    }
+
+    function errorMsg(e) {
+      if (e.message) return e.message;
+      if (module && module.getExceptionMessage) {
+        try { return module.getExceptionMessage(e).join(': '); } catch {}
+      }
+      if (typeof e === 'string') return e;
+      return 'Unknown error (exception pointer: ' + String(e) + ')';
+    }
+
+    async function testShape(name) {
+      try {
+        resetBeforeAfter();
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.analyzeTestShapeDetailed(name);
+          showAnalysis(result.analysis);
+        } else {
+          const ok = analyzer.loadTestShape(name);
+          if (!ok) throw new Error(analyzer.getLastError());
+          showAnalysis(analyzer.getAnalysis());
+        }
+        await updateViewport();
+        originalRenderData = currentRenderData;
+      } catch (e) {
+        showError('Error: ' + errorMsg(e));
+      }
+    }
+
+    async function analyzeFile(arrayBuffer, filename) {
+      try {
+        resetBeforeAfter();
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.analyzeDetailed(arrayBuffer);
+          showAnalysis(result.analysis);
+        } else {
+          const data = new Uint8Array(arrayBuffer);
+          const ext = filename.split('.').pop().toLowerCase();
+          const path = '/tmp/input.' + ext;
+          module.FS.writeFile(path, data);
+          const ok = analyzer.loadFromFile(path);
+          if (!ok) throw new Error(analyzer.getLastError() || 'Failed to parse file (unsupported format or corrupt data)');
+          const analysis = analyzer.getAnalysis();
+          const err = analyzer.getLastError();
+          if (err) console.warn('Analysis warning:', err);
+          showAnalysis(analysis);
+          try { module.FS.unlink(path); } catch {}
+        }
+        await updateViewport();
+        originalRenderData = currentRenderData;
+      } catch (e) {
+        showError('Error: ' + errorMsg(e));
+      }
+    }
+
+    // Init worker on page load
+    function enableButtons() {
+      Object.values(buttons).forEach(b => b.disabled = false);
+      weldBtn.disabled = false;
+      degenBtn.disabled = false;
+      fixNormalsBtn.disabled = false;
+      splitVertsBtn.disabled = false;
+      fillHolesBtn.disabled = false;
+      repairBtn.disabled = false;
+      downloadBtn.disabled = false;
+    }
+
+    MeshFixWorker.init({
+      workerUrl: '../dist/worker.js',
+      coreUrl: '../dist/meshfix-core.js',
+      wasmUrl: '../dist/meshfix-core.wasm',
+    }).then(w => {
+      workerInstance = w;
+      useWorker = true;
+      statusEl.textContent = 'Ready';
+      statusEl.className = 'status-ready';
+      enableButtons();
+    }).catch(e => {
+      statusEl.textContent = 'Worker failed, falling back to main thread...';
+      // Fallback to main thread
+      createMeshFixCore().then(m => {
+        module = m;
+        analyzer = new m.MeshAnalyzer();
+        useWorker = false;
+        statusEl.textContent = 'Ready (main thread)';
+        statusEl.className = 'status-ready';
+        workerStatusEl.textContent = 'Worker unavailable — using main thread';
+        enableButtons();
+      }).catch(e2 => {
+        statusEl.textContent = 'Failed to load: ' + e2.message;
+        statusEl.className = 'status-error';
+      });
+    });
+
+    // Button handlers
+    buttons.icosphere.addEventListener('click', () => testShape('icosphere'));
+    buttons.torus.addEventListener('click', () => testShape('torus'));
+    buttons.tetrahedron.addEventListener('click', () => testShape('tetrahedron'));
+    buttons.bowtie.addEventListener('click', () => testShape('bowtie'));
+
+    // Weld handler
+    weldBtn.addEventListener('click', async () => {
+      if (!useWorker && (!analyzer || !analyzer.isLoaded())) {
+        showError('No mesh loaded. Load a file or test shape first.');
+        return;
+      }
+      try {
+        const epsilon = parseFloat(weldEpsilonInput.value) || 1e-5;
+        const r = (useWorker && workerInstance) ? await workerInstance.weldVertices(epsilon) : analyzer.weldVertices(epsilon);
+        weldResultEl.style.display = 'block';
+        if (r.verticesMerged === 0 && r.facesRemoved === 0) {
+          weldResultEl.textContent = 'No vertices to weld at epsilon=' + epsilon;
+          weldResultEl.style.background = '#d1ecf1';
+          weldResultEl.style.color = '#0c5460';
+        } else {
+          var msg = 'Welded ' + r.verticesMerged.toLocaleString() + ' vertices (' +
+            r.verticesBefore.toLocaleString() + ' \u2192 ' + r.verticesAfter.toLocaleString() + ')';
+          if (r.degenerateFaces > 0) msg += ', removed ' + r.degenerateFaces + ' degenerate face(s)';
+          if (r.skippedFaces > 0) msg += ', skipped ' + r.skippedFaces + ' face(s)';
+          weldResultEl.textContent = msg;
+          weldResultEl.style.background = '#d4edda';
+          weldResultEl.style.color = '#155724';
+        }
+        // Refresh analysis
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.reanalyze();
+          showAnalysis(result.analysis);
+        } else {
+          showAnalysis(analyzer.getAnalysis());
+        }
+        await updateViewport(false);
+        showBeforeAfterToggle();
+      } catch (e) {
+        showError('Weld error: ' + errorMsg(e));
+      }
+    });
+
+    // Remove degenerates handler
+    degenBtn.addEventListener('click', async () => {
+      if (!useWorker && (!analyzer || !analyzer.isLoaded())) {
+        showError('No mesh loaded. Load a file or test shape first.');
+        return;
+      }
+      try {
+        const minArea = parseFloat(degenMinAreaInput.value) || 1e-10;
+        const r = (useWorker && workerInstance) ? await workerInstance.removeDegenerates(minArea) : analyzer.removeDegenerates(minArea);
+        degenResultEl.style.display = 'block';
+        if (r.degenerateRemoved === 0 && r.duplicateRemoved === 0 && r.isolatedVerticesRemoved === 0) {
+          degenResultEl.textContent = 'No degenerate/duplicate faces or isolated vertices found';
+          degenResultEl.style.background = '#d1ecf1';
+          degenResultEl.style.color = '#0c5460';
+        } else {
+          var parts = [];
+          if (r.degenerateRemoved > 0) parts.push(r.degenerateRemoved + ' degenerate');
+          if (r.duplicateRemoved > 0) parts.push(r.duplicateRemoved + ' duplicate');
+          var msg = 'Removed ' + parts.join(' + ') + ' face(s)';
+          msg += ' (' + r.facesBefore.toLocaleString() + ' \u2192 ' + r.facesAfter.toLocaleString() + ')';
+          if (r.isolatedVerticesRemoved > 0) msg += ', cleaned ' + r.isolatedVerticesRemoved + ' isolated vertex(es)';
+          degenResultEl.textContent = msg;
+          degenResultEl.style.background = '#d4edda';
+          degenResultEl.style.color = '#155724';
+        }
+        // Refresh analysis
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.reanalyze();
+          showAnalysis(result.analysis);
+        } else {
+          showAnalysis(analyzer.getAnalysis());
+        }
+        await updateViewport(false);
+        showBeforeAfterToggle();
+      } catch (e) {
+        showError('Remove degenerates error: ' + errorMsg(e));
+      }
+    });
+
+    // Fix normals handler
+    fixNormalsBtn.addEventListener('click', async () => {
+      if (!useWorker && (!analyzer || !analyzer.isLoaded())) {
+        showError('No mesh loaded. Load a file or test shape first.');
+        return;
+      }
+      try {
+        const r = (useWorker && workerInstance) ? await workerInstance.fixNormals() : analyzer.fixNormals();
+        normalsResultEl.style.display = 'block';
+        if (r.componentsFlipped === 0) {
+          normalsResultEl.textContent = 'All normals already consistent';
+          normalsResultEl.style.background = '#d1ecf1';
+          normalsResultEl.style.color = '#0c5460';
+        } else {
+          var msg = 'Flipped ' + r.componentsFlipped + ' component(s) (' + r.facesFlipped + ' faces)';
+          if (r.skippedOpen > 0) msg += ', skipped ' + r.skippedOpen + ' open component(s)';
+          if (r.skippedFaces > 0) msg += ', ' + r.skippedFaces + ' face(s) lost during rebuild';
+          normalsResultEl.textContent = msg;
+          normalsResultEl.style.background = '#d4edda';
+          normalsResultEl.style.color = '#155724';
+        }
+        // Refresh analysis
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.reanalyze();
+          showAnalysis(result.analysis);
+        } else {
+          showAnalysis(analyzer.getAnalysis());
+        }
+        await updateViewport(false);
+        showBeforeAfterToggle();
+      } catch (e) {
+        showError('Fix normals error: ' + errorMsg(e));
+      }
+    });
+
+    // Split non-manifold vertices handler
+    splitVertsBtn.addEventListener('click', async () => {
+      if (!useWorker && (!analyzer || !analyzer.isLoaded())) {
+        showError('No mesh loaded. Load a file or test shape first.');
+        return;
+      }
+      try {
+        const r = (useWorker && workerInstance) ? await workerInstance.splitVertices() : analyzer.splitVertices();
+        splitResultEl.style.display = 'block';
+        if (r.nonManifoldVerticesFound === 0) {
+          splitResultEl.textContent = 'No non-manifold vertices found';
+          splitResultEl.style.background = '#d1ecf1';
+          splitResultEl.style.color = '#0c5460';
+        } else {
+          var msg = 'Split ' + r.nonManifoldVerticesFound + ' non-manifold vertex(es), ' + r.verticesAdded + ' vertices added';
+          if (r.skippedFaces > 0) msg += ' + ' + r.skippedFaces + ' face(s) lost during rebuild';
+          splitResultEl.textContent = msg;
+          splitResultEl.style.background = '#d4edda';
+          splitResultEl.style.color = '#155724';
+        }
+        // Refresh analysis
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.reanalyze();
+          showAnalysis(result.analysis);
+        } else {
+          showAnalysis(analyzer.getAnalysis());
+        }
+        await updateViewport(false);
+        showBeforeAfterToggle();
+      } catch (e) {
+        showError('Split vertices error: ' + errorMsg(e));
+      }
+    });
+
+    // Fill holes handler
+    fillHolesBtn.addEventListener('click', async () => {
+      if (!useWorker && (!analyzer || !analyzer.isLoaded())) {
+        showError('No mesh loaded. Load a file or test shape first.');
+        return;
+      }
+      try {
+        const maxEdges = parseInt(fillMaxEdgesInput.value) || 100;
+        const r = (useWorker && workerInstance) ? await workerInstance.fillHoles(maxEdges) : analyzer.fillHoles(maxEdges);
+        fillResultEl.style.display = 'block';
+        if (r.holesFound === 0) {
+          fillResultEl.textContent = 'No holes found';
+          fillResultEl.style.background = '#d1ecf1';
+          fillResultEl.style.color = '#0c5460';
+        } else {
+          var msg = 'Filled ' + r.holesFilled + ' hole(s), ' + r.facesAdded + ' faces added';
+          if (r.holesSkipped > 0) msg += ' + ' + r.holesSkipped + ' hole(s) skipped (> ' + maxEdges + ' edges)';
+          if (r.holesFailed > 0) msg += ' + ' + r.holesFailed + ' hole(s) failed (non-manifold boundary)';
+          fillResultEl.textContent = msg;
+          fillResultEl.style.background = '#d4edda';
+          fillResultEl.style.color = '#155724';
+        }
+        // Refresh analysis
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.reanalyze();
+          showAnalysis(result.analysis);
+        } else {
+          showAnalysis(analyzer.getAnalysis());
+        }
+        await updateViewport(false);
+        showBeforeAfterToggle();
+      } catch (e) {
+        showError('Fill holes error: ' + errorMsg(e));
+      }
+    });
+
+    // Step name map for progress display
+    const stepNames = {
+      weld: 'welding vertices',
+      removeDegenerates: 'removing degenerates',
+      splitVertices: 'splitting non-manifold vertices',
+      fillHoles: 'filling holes',
+      fixNormals: 'fixing normals',
+    };
+
+    // Auto repair handler
+    repairBtn.addEventListener('click', async () => {
+      if (!useWorker && (!analyzer || !analyzer.isLoaded())) {
+        showError('No mesh loaded. Load a file or test shape first.');
+        return;
+      }
+      try {
+        const epsilon = parseFloat(weldEpsilonInput.value) || 1e-5;
+        const minArea = parseFloat(degenMinAreaInput.value) || 1e-10;
+        const maxEdges = parseInt(fillMaxEdgesInput.value) || 100;
+        const opts = { weldEpsilon: epsilon, minArea, maxHoleEdges: maxEdges };
+
+        const onProgress = (ev) => {
+          repairResultEl.style.display = 'block';
+          repairResultEl.textContent = 'Repairing... ' + (stepNames[ev.step] || ev.step) + ' (' + (ev.stepIndex + 1) + '/' + ev.totalSteps + ')';
+          repairResultEl.style.background = '#fff3cd';
+          repairResultEl.style.color = '#856404';
+        };
+
+        let r;
+        if (useWorker && workerInstance) {
+          r = await workerInstance.repair(opts, onProgress);
+        } else {
+          // Main thread — inline steps with synchronous progress
+          if (!analyzer.isLoaded()) throw new Error('No mesh loaded');
+          const verticesBefore = analyzer.getVertexCount();
+          const facesBefore = analyzer.getFaceCount();
+          onProgress({ step: 'weld', stepIndex: 0, totalSteps: 5 });
+          const weld = analyzer.weldVertices(epsilon);
+          onProgress({ step: 'removeDegenerates', stepIndex: 1, totalSteps: 5 });
+          const removeDeg = analyzer.removeDegenerates(minArea);
+          onProgress({ step: 'splitVertices', stepIndex: 2, totalSteps: 5 });
+          const split = analyzer.splitVertices();
+          onProgress({ step: 'fillHoles', stepIndex: 3, totalSteps: 5 });
+          const fill = analyzer.fillHoles(maxEdges);
+          onProgress({ step: 'fixNormals', stepIndex: 4, totalSteps: 5 });
+          const normals = analyzer.fixNormals();
+          r = {
+            weld, removeDegenerates: removeDeg, splitVertices: split,
+            fillHoles: fill, fixNormals: normals,
+            verticesBefore, verticesAfter: analyzer.getVertexCount(),
+            facesBefore, facesAfter: analyzer.getFaceCount(),
+          };
+        }
+
+        var lines = [];
+        lines.push('Repair complete: ' + r.verticesBefore.toLocaleString() + ' verts / ' +
+          r.facesBefore.toLocaleString() + ' faces \u2192 ' +
+          r.verticesAfter.toLocaleString() + ' verts / ' +
+          r.facesAfter.toLocaleString() + ' faces');
+
+        // Step summaries — only show steps that did something
+        if (r.weld.verticesMerged > 0 || r.weld.facesRemoved > 0) {
+          lines.push('\u2022 Weld: merged ' + r.weld.verticesMerged + ' vertices, removed ' + r.weld.facesRemoved + ' faces');
+        }
+        if (r.removeDegenerates.degenerateRemoved > 0 || r.removeDegenerates.duplicateRemoved > 0) {
+          var parts = [];
+          if (r.removeDegenerates.degenerateRemoved > 0) parts.push(r.removeDegenerates.degenerateRemoved + ' degenerate');
+          if (r.removeDegenerates.duplicateRemoved > 0) parts.push(r.removeDegenerates.duplicateRemoved + ' duplicate');
+          lines.push('\u2022 Remove: ' + parts.join(' + ') + ' face(s)');
+        }
+        if (r.splitVertices.nonManifoldVerticesFound > 0) {
+          lines.push('\u2022 Split: ' + r.splitVertices.nonManifoldVerticesFound + ' non-manifold vertex(es), ' + r.splitVertices.verticesAdded + ' added');
+        }
+        if (r.fixNormals.componentsFlipped > 0) {
+          lines.push('\u2022 Normals: flipped ' + r.fixNormals.componentsFlipped + ' component(s) (' + r.fixNormals.facesFlipped + ' faces)');
+        }
+        if (r.fillHoles.holesFilled > 0) {
+          lines.push('\u2022 Holes: filled ' + r.fillHoles.holesFilled + ', ' + r.fillHoles.facesAdded + ' faces added');
+        }
+
+        if (lines.length === 1) {
+          lines.push('No repairs needed \u2014 mesh was already clean.');
+        }
+
+        repairResultEl.style.display = 'block';
+        repairResultEl.textContent = lines.join('\n');
+        repairResultEl.style.background = '#d4edda';
+        repairResultEl.style.color = '#155724';
+
+        // Hide individual step results
+        weldResultEl.style.display = 'none';
+        degenResultEl.style.display = 'none';
+        normalsResultEl.style.display = 'none';
+        splitResultEl.style.display = 'none';
+        fillResultEl.style.display = 'none';
+
+        // Refresh analysis
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.reanalyze();
+          showAnalysis(result.analysis);
+        } else {
+          showAnalysis(analyzer.getAnalysis());
+        }
+        await updateViewport(false);
+        showBeforeAfterToggle();
+      } catch (e) {
+        showError('Repair error: ' + errorMsg(e));
+      }
+    });
+
+    // Download mesh
+    downloadBtn.addEventListener('click', async () => {
+      if (!useWorker && (!analyzer || !analyzer.isLoaded())) {
+        showError('No mesh loaded. Load a file or test shape first.');
+        return;
+      }
+      try {
+        const format = exportFormatSelect.value;
+        let arrayBuffer;
+        if (useWorker && workerInstance) {
+          arrayBuffer = await workerInstance.exportMesh(format);
+        } else {
+          const path = '/tmp/export.' + format;
+          const ok = analyzer.exportMesh(path);
+          if (!ok) throw new Error(analyzer.getLastError() || 'Failed to export mesh');
+          const data = module.FS.readFile(path);
+          arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+          try { module.FS.unlink(path); } catch {}
+        }
+        const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'repaired.' + format;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        showError('Download error: ' + errorMsg(e));
+      }
+    });
+
+    // Drag and drop
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      dropZone.textContent = 'Loading ' + file.name + '...';
+      const reader = new FileReader();
+      reader.onload = async () => {
+        await analyzeFile(reader.result, file.name);
+        dropZone.textContent = 'Loaded: ' + file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  </script>
+</body>
+</html>

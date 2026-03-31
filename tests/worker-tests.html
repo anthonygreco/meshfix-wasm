@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>meshfix-wasm Worker Tests</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #222; }
+    h1 { margin-bottom: 8px; }
+    #status { margin-bottom: 20px; padding: 8px 12px; border-radius: 4px; font-weight: 600; }
+    .status-running { background: #fff3cd; color: #856404; }
+    .status-pass { background: #d4edda; color: #155724; }
+    .status-fail { background: #f8d7da; color: #721c24; }
+    .test-result { padding: 6px 12px; margin: 4px 0; border-radius: 4px; font-size: 14px; }
+    .test-pass { background: #d4edda; color: #155724; }
+    .test-fail { background: #f8d7da; color: #721c24; }
+    .test-section { margin: 16px 0 8px; font-weight: 600; color: #555; }
+    a { color: #0066cc; }
+  </style>
+</head>
+<body>
+  <h1>meshfix-wasm Worker Tests</h1>
+  <p style="margin-bottom:12px;"><a href="./">&larr; Back to hub</a></p>
+  <div id="status" class="status-running">Running tests...</div>
+  <div id="results"></div>
+
+  <script src="../dist/meshfix-core.js"></script>
+  <script type="module">
+    import { MeshFix, MeshFixWorker } from "../dist/index.js";
+
+    const resultsEl = document.getElementById("results");
+    const statusEl = document.getElementById("status");
+    let passed = 0;
+    let failed = 0;
+
+    function section(title) {
+      const el = document.createElement("div");
+      el.className = "test-section";
+      el.textContent = title;
+      resultsEl.appendChild(el);
+    }
+
+    function pass(name) {
+      passed++;
+      const el = document.createElement("div");
+      el.className = "test-result test-pass";
+      el.textContent = "\u2713 " + name;
+      resultsEl.appendChild(el);
+    }
+
+    function fail(name, err) {
+      failed++;
+      const el = document.createElement("div");
+      el.className = "test-result test-fail";
+      el.textContent = "\u2717 " + name + " \u2014 " + (err.message || err);
+      resultsEl.appendChild(el);
+    }
+
+    function assert(condition, msg) {
+      if (!condition) throw new Error(msg || "Assertion failed");
+    }
+
+    function assertEqual(a, b, label) {
+      if (a !== b) throw new Error((label || "") + " expected " + b + ", got " + a);
+    }
+
+    const workerOpts = {
+      workerUrl: "../dist/worker.js",
+      coreUrl: "../dist/meshfix-core.js",
+      wasmUrl: "../dist/meshfix-core.wasm",
+    };
+
+    async function runTests() {
+      let worker = null;
+      let mainThread = null;
+
+      try {
+        // --- Initialization ---
+        section("Initialization");
+
+        try {
+          worker = await MeshFixWorker.init(workerOpts);
+          pass("MeshFixWorker.init() succeeds");
+        } catch (e) { fail("MeshFixWorker.init()", e); return; }
+
+        // --- Shape analysis via worker ---
+        section("Shape Analysis via Worker");
+
+        try {
+          const stats = await worker.analyzeTestShape("icosphere");
+          assertEqual(stats.vertexCount, 642, "vertexCount");
+          assertEqual(stats.faceCount, 1280, "faceCount");
+          pass("Icosphere: 642 verts, 1280 faces");
+        } catch (e) { fail("Icosphere stats", e); }
+
+        try {
+          const r = await worker.analyzeTestShapeDetailed("icosphere");
+          assertEqual(r.analysis.isManifold, true, "isManifold");
+          assertEqual(r.analysis.isWatertight, true, "isWatertight");
+          assertEqual(r.issues.length, 0, "issues.length");
+          pass("Icosphere detailed: manifold, watertight, 0 issues");
+        } catch (e) { fail("Icosphere detailed", e); }
+
+        try {
+          const r = await worker.analyzeTestShapeDetailed("torus");
+          assertEqual(r.analysis.isManifold, true, "isManifold");
+          assertEqual(r.analysis.eulerCharacteristic, 0, "euler");
+          assertEqual(r.analysis.genus, 1, "genus");
+          pass("Torus: manifold, euler=0, genus=1");
+        } catch (e) { fail("Torus", e); }
+
+        try {
+          const r = await worker.analyzeTestShapeDetailed("bowtie");
+          assertEqual(r.analysis.isManifold, false, "isManifold");
+          assert(r.analysis.nonManifoldVertexCount > 0, "nonManifoldVertexCount > 0");
+          pass("Bowtie: non-manifold (" + r.analysis.nonManifoldVertexCount + " NM verts)");
+        } catch (e) { fail("Bowtie", e); }
+
+        // --- Individual repairs via worker (clean mesh) ---
+        section("Individual Repairs via Worker (clean mesh)");
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const r = await worker.weldVertices();
+          assertEqual(r.verticesMerged, 0, "verticesMerged");
+          pass("weldVertices: 0 merged");
+        } catch (e) { fail("weldVertices clean", e); }
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const r = await worker.removeDegenerates();
+          assertEqual(r.degenerateRemoved, 0, "degenerateRemoved");
+          pass("removeDegenerates: 0 removed");
+        } catch (e) { fail("removeDegenerates clean", e); }
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const r = await worker.fixNormals();
+          assertEqual(r.componentsFlipped, 0, "componentsFlipped");
+          pass("fixNormals: 0 flipped");
+        } catch (e) { fail("fixNormals clean", e); }
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const r = await worker.splitVertices();
+          assertEqual(r.nonManifoldVerticesFound, 0, "nonManifoldVerticesFound");
+          pass("splitVertices: 0 found");
+        } catch (e) { fail("splitVertices clean", e); }
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const r = await worker.fillHoles();
+          assertEqual(r.holesFound, 0, "holesFound");
+          pass("fillHoles: 0 holes");
+        } catch (e) { fail("fillHoles clean", e); }
+
+        // --- Repairs via worker (bowtie) ---
+        section("Repairs via Worker (bowtie)");
+
+        try {
+          await worker.analyzeTestShapeDetailed("bowtie");
+          const r = await worker.splitVertices();
+          assert(r.nonManifoldVerticesFound > 0, "should find NM verts");
+          const after = await worker.reanalyze();
+          assertEqual(after.analysis.nonManifoldVertexCount, 0, "post-split NM");
+          pass("splitVertices on bowtie: " + r.nonManifoldVerticesFound + " found, post-split NM=0");
+        } catch (e) { fail("splitVertices bowtie", e); }
+
+        try {
+          await worker.analyzeTestShapeDetailed("bowtie");
+          const r = await worker.repair();
+          assert(r.splitVertices.nonManifoldVerticesFound > 0, "repair should find NM verts");
+          const after = await worker.reanalyze();
+          assertEqual(after.analysis.nonManifoldVertexCount, 0, "post-repair NM");
+          pass("auto repair on bowtie: NM verts fixed, post-repair NM=0");
+        } catch (e) { fail("auto repair bowtie", e); }
+
+        // --- Export formats via worker ---
+        section("Export Formats via Worker");
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const stlBuf = await worker.exportMesh("stl");
+          assert(stlBuf instanceof ArrayBuffer, "STL returns ArrayBuffer");
+          assert(stlBuf.byteLength > 0, "STL has data");
+          const stlView = new DataView(stlBuf);
+          const triCount = stlView.getUint32(80, true);
+          assertEqual(triCount, 1280, "STL triangle count");
+          pass("exportMesh('stl'): " + stlBuf.byteLength + " bytes, " + triCount + " triangles");
+        } catch (e) { fail("exportMesh STL", e); }
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const objBuf = await worker.exportMesh("obj");
+          assert(objBuf instanceof ArrayBuffer, "OBJ returns ArrayBuffer");
+          assert(objBuf.byteLength > 0, "OBJ has data");
+          const objText = new TextDecoder().decode(objBuf);
+          assert(objText.includes("v "), "OBJ has vertex lines");
+          assert(objText.includes("f "), "OBJ has face lines");
+          const objVerts = objText.split("\n").filter(l => l.startsWith("v ")).length;
+          const objFaces = objText.split("\n").filter(l => l.startsWith("f ")).length;
+          assertEqual(objVerts, 642, "OBJ vertex count");
+          assertEqual(objFaces, 1280, "OBJ face count");
+          const faceLines = objText.split("\n").filter(l => l.startsWith("f "));
+          const firstFace = faceLines[0].trim().split(/\s+/).slice(1);
+          assertEqual(firstFace.length, 3, "OBJ face has 3 vertices");
+          for (const idx of firstFace) {
+            const vi = parseInt(idx.split("/")[0]);
+            assert(vi >= 1 && vi <= objVerts, "OBJ face index in range");
+          }
+          pass("exportMesh('obj'): " + objVerts + " verts, " + objFaces + " faces, valid indices");
+        } catch (e) { fail("exportMesh OBJ", e); }
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const offBuf = await worker.exportMesh("off");
+          assert(offBuf instanceof ArrayBuffer, "OFF returns ArrayBuffer");
+          assert(offBuf.byteLength > 0, "OFF has data");
+          const offText = new TextDecoder().decode(offBuf);
+          assert(offText.startsWith("OFF"), "OFF starts with header");
+          const offLines = offText.split("\n").filter(l => l.trim().length > 0);
+          const headerParts = offLines[1].trim().split(/\s+/);
+          const offVerts = parseInt(headerParts[0]);
+          const offFaces = parseInt(headerParts[1]);
+          assertEqual(offVerts, 642, "OFF header vertex count");
+          assertEqual(offFaces, 1280, "OFF header face count");
+          let dataVertCount = 0;
+          let dataFaceCount = 0;
+          for (let i = 2; i < offLines.length; i++) {
+            const parts = offLines[i].trim().split(/\s+/);
+            if (dataVertCount < offVerts) {
+              dataVertCount++;
+            } else {
+              dataFaceCount++;
+              assertEqual(parseInt(parts[0]), 3, "OFF face vertex count is 3");
+            }
+          }
+          assertEqual(dataVertCount, 642, "OFF actual vertex data lines");
+          assertEqual(dataFaceCount, 1280, "OFF actual face data lines");
+          pass("exportMesh('off'): " + offVerts + " verts, " + offFaces + " faces, data matches header");
+        } catch (e) { fail("exportMesh OFF", e); }
+
+        // --- Progress callbacks via worker ---
+        section("Progress Callbacks via Worker");
+
+        try {
+          await worker.analyzeTestShape("bowtie");
+          const events = [];
+          await worker.repair({}, (ev) => events.push({...ev}));
+          assertEqual(events.length, 5, "progress event count");
+          assertEqual(events[0].step, "weld", "first step");
+          assertEqual(events[0].stepIndex, 0, "first stepIndex");
+          assertEqual(events[0].totalSteps, 5, "totalSteps");
+          assertEqual(events[4].step, "fixNormals", "last step");
+          assertEqual(events[4].stepIndex, 4, "last stepIndex");
+          pass("worker repair() fires 5 progress events with correct step names");
+        } catch (e) { fail("Worker progress callbacks", e); }
+
+        // --- Render Data via Worker ---
+        section("Render Data via Worker");
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const rd = await worker.toRenderData();
+          assert(rd.positions instanceof Float32Array, "positions is Float32Array");
+          assertEqual(rd.positions.length, 642 * 3, "positions.length");
+          assert(rd.normals instanceof Float32Array, "normals is Float32Array");
+          assertEqual(rd.normals.length, 642 * 3, "normals.length");
+          assert(rd.indices instanceof Uint32Array, "indices is Uint32Array");
+          assertEqual(rd.indices.length, 1280 * 3, "indices.length");
+          pass("toRenderData() icosphere: " + rd.positions.length + " pos, " + rd.normals.length + " norm, " + rd.indices.length + " idx");
+        } catch (e) { fail("toRenderData icosphere", e); }
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const rd = await worker.toRenderData();
+          let allFinite = true;
+          for (let i = 0; i < rd.positions.length; i++) {
+            if (!Number.isFinite(rd.positions[i])) { allFinite = false; break; }
+          }
+          for (let i = 0; i < rd.normals.length; i++) {
+            if (!Number.isFinite(rd.normals[i])) { allFinite = false; break; }
+          }
+          assert(allFinite, "all position and normal values should be finite");
+          pass("toRenderData() values are all finite (no NaN/Infinity)");
+        } catch (e) { fail("toRenderData finite values", e); }
+
+        // --- Face Flags via Worker ---
+        section("Face Flags via Worker (Issue Overlay)");
+
+        try {
+          await worker.analyzeTestShape("icosphere");
+          const rd = await worker.toRenderData();
+          assert(rd.faceFlags instanceof Uint8Array, "faceFlags is Uint8Array");
+          assertEqual(rd.faceFlags.length, 1280, "faceFlags.length matches faceCount");
+          let allZero = true;
+          for (let i = 0; i < rd.faceFlags.length; i++) {
+            if (rd.faceFlags[i] !== 0) { allZero = false; break; }
+          }
+          assert(allZero, "clean icosphere should have all-zero faceFlags");
+          pass("faceFlags: icosphere has " + rd.faceFlags.length + " flags, all zero (clean)");
+        } catch (e) { fail("faceFlags icosphere", e); }
+
+        try {
+          await worker.analyzeTestShapeDetailed("bowtie");
+          const rd = await worker.toRenderData();
+          assert(rd.faceFlags instanceof Uint8Array, "faceFlags is Uint8Array");
+          assert(rd.faceFlags.length > 0, "faceFlags has entries");
+          let hasNonZero = false;
+          for (let i = 0; i < rd.faceFlags.length; i++) {
+            if (rd.faceFlags[i] !== 0) { hasNonZero = true; break; }
+          }
+          assert(hasNonZero, "bowtie should have non-zero faceFlags (issues present)");
+          pass("faceFlags: bowtie has non-zero flags (issues detected)");
+        } catch (e) { fail("faceFlags bowtie", e); }
+
+        // --- Main thread vs worker comparison ---
+        section("Main Thread vs Worker Comparison");
+
+        try {
+          mainThread = await MeshFix.init();
+          const mainStats = mainThread.analyzeTestShape("icosphere");
+          const workerStats = await worker.analyzeTestShape("icosphere");
+          assertEqual(workerStats.vertexCount, mainStats.vertexCount, "vertexCount");
+          assertEqual(workerStats.faceCount, mainStats.faceCount, "faceCount");
+          assertEqual(workerStats.edgeCount, mainStats.edgeCount, "edgeCount");
+          assertEqual(workerStats.boundaryEdges, mainStats.boundaryEdges, "boundaryEdges");
+          pass("Icosphere stats match: " + mainStats.vertexCount + "v " + mainStats.faceCount + "f " + mainStats.edgeCount + "e");
+        } catch (e) { fail("Stats comparison", e); }
+
+        // --- Error handling ---
+        section("Error Handling");
+
+        try {
+          const freshWorker = await MeshFixWorker.init(workerOpts);
+          try {
+            await freshWorker.weldVertices();
+            fail("weldVertices before load should reject", new Error("Did not throw"));
+          } catch (e) {
+            assert(e.message.includes("No mesh loaded"), "should say 'No mesh loaded', got: " + e.message);
+            pass("weldVertices before load rejects with 'No mesh loaded'");
+          }
+          freshWorker.dispose();
+        } catch (e) { fail("Error handling", e); }
+
+        // --- ArrayBuffer transfer ---
+        section("ArrayBuffer Transfer");
+
+        try {
+          const buf = new ArrayBuffer(16);
+          const view = new Uint8Array(buf);
+          view[0] = 0x73;
+          try {
+            await worker.analyze(buf);
+          } catch {
+            // Expected to fail (invalid STL), but buffer should be detached
+          }
+          assertEqual(buf.byteLength, 0, "buffer.byteLength after transfer");
+          pass("ArrayBuffer detached after transfer (byteLength=0)");
+        } catch (e) { fail("ArrayBuffer detachment", e); }
+
+        // --- Worker lifecycle ---
+        section("Worker Lifecycle");
+
+        try {
+          const w2 = await MeshFixWorker.init(workerOpts);
+          w2.dispose();
+          const w3 = await MeshFixWorker.init(workerOpts);
+          const stats = await w3.analyzeTestShape("icosphere");
+          assertEqual(stats.vertexCount, 642, "vertexCount after re-init");
+          pass("dispose + re-init works (642 verts)");
+          w3.dispose();
+        } catch (e) { fail("Worker lifecycle", e); }
+
+      } finally {
+        if (worker) worker.dispose();
+        if (mainThread) mainThread.dispose();
+      }
+
+      // Summary
+      if (failed === 0) {
+        statusEl.textContent = "All " + passed + " tests passed!";
+        statusEl.className = "status-pass";
+      } else {
+        statusEl.textContent = passed + " passed, " + failed + " failed";
+        statusEl.className = "status-fail";
+      }
+    }
+
+    runTests().catch(e => {
+      statusEl.textContent = "Test runner error: " + e.message;
+      statusEl.className = "status-fail";
+      console.error(e);
+    });
+  </script>
+</body>
+</html>

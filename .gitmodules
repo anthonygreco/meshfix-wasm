@@ -1,0 +1,4 @@
+[submodule "third_party/pmp-library"]
+	path = third_party/pmp-library
+	url = https://github.com/pmp-library/pmp-library.git
+	ignore = dirty

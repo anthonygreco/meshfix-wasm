@@ -1,0 +1,50 @@
+{
+  "name": "meshfix-wasm",
+  "version": "0.1.0",
+  "description": "Client-side 3D mesh repair library using WASM",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "install-emsdk": "bash scripts/install-emsdk.sh",
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "build:ts": "tsc",
+    "build": "npm run build:wasm && npm run build:ts",
+    "prepublishOnly": "npm run build",
+    "serve": "npx http-server . -p 8080 -c-1"
+  },
+  "keywords": [
+    "wasm",
+    "webassembly",
+    "mesh",
+    "3d-printing",
+    "stl",
+    "obj",
+    "repair",
+    "geometry",
+    "pmp"
+  ],
+  "author": "Anthony Greco <anthony.greco@gmail.com> (https://justfixstl.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthonygreco/meshfix-wasm.git"
+  },
+  "homepage": "https://github.com/anthonygreco/meshfix-wasm",
+  "bugs": {
+    "url": "https://github.com/anthonygreco/meshfix-wasm/issues"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "http-server": "^14.1.1"
+  }
+}

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>meshfix-wasm Tests</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 700px; margin: 60px auto; padding: 0 20px; color: #222; }
+    h1 { margin-bottom: 6px; }
+    .subtitle { color: #666; margin-bottom: 32px; font-size: 15px; }
+    .card {
+      display: block; padding: 20px 24px; margin-bottom: 16px; border-radius: 8px;
+      border: 1px solid #dee2e6; text-decoration: none; color: inherit;
+      transition: box-shadow 0.15s, border-color 0.15s;
+    }
+    .card:hover { border-color: #0066cc; box-shadow: 0 2px 8px rgba(0,102,204,0.15); }
+    .card h2 { font-size: 1.1em; margin-bottom: 4px; color: #0066cc; }
+    .card p { font-size: 14px; color: #555; margin: 0; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      font-size: 11px; font-weight: 600; vertical-align: middle; margin-left: 8px;
+    }
+    .badge-auto { background: #d4edda; color: #155724; }
+    .badge-manual { background: #fff3cd; color: #856404; }
+  </style>
+</head>
+<body>
+  <h1>meshfix-wasm Tests</h1>
+  <p class="subtitle">Client-side 3D mesh repair library</p>
+
+  <a class="card" href="main-tests.html">
+    <h2>Main Thread Tests <span class="badge badge-auto">automated</span></h2>
+    <p>MeshFix API: init, test shapes, topology analysis, individual repairs, auto repair, error handling, exports.</p>
+  </a>
+
+  <a class="card" href="worker-tests.html">
+    <h2>Worker Tests <span class="badge badge-auto">automated</span></h2>
+    <p>MeshFixWorker API: init, shape analysis, repairs, main-thread comparison, buffer transfer, lifecycle.</p>
+  </a>
+
+  <a class="card" href="demo.html">
+    <h2>Interactive Demo <span class="badge badge-manual">manual</span></h2>
+    <p>Drag-and-drop STL files, test shapes, individual repair controls, worker mode toggle.</p>
+  </a>
+</body>
+</html>
