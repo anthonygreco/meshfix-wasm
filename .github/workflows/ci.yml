@@ -42,3 +42,6 @@ jobs:
 
       - name: Verify npm package
         run: npm pack --dry-run
+
+      - name: Run automated tests
+        run: npm test

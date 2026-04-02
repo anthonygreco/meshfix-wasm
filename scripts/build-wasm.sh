@@ -47,6 +47,9 @@ echo ""
 echo "=== Building ==="
 emmake make -j$(nproc) VERBOSE=1
 
+# Mark dist/ as CommonJS so Node.js can require() the Emscripten output
+echo '{"type":"commonjs"}' > "$ROOT_DIR/dist/package.json"
+
 echo ""
 echo "=== Verifying output ==="
 if [ -f "$ROOT_DIR/dist/meshfix-core.js" ] && [ -f "$ROOT_DIR/dist/meshfix-core.wasm" ]; then

@@ -20,6 +20,8 @@
     "build:wasm": "bash scripts/build-wasm.sh",
     "build:ts": "tsc",
     "build": "npm run build:wasm && npm run build:ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepublishOnly": "npm run build",
     "serve": "npx http-server . -p 8080 -c-1"
   },
@@ -46,6 +48,7 @@
   },
   "devDependencies": {
     "typescript": "^5.3.0",
-    "http-server": "^14.1.1"
+    "http-server": "^14.1.1",
+    "vitest": "^3.1.1"
   }
 }
