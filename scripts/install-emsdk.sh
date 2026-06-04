@@ -16,10 +16,10 @@ echo "Cloning emsdk..."
 git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
 
 cd "$EMSDK_DIR"
-echo "Installing latest emsdk..."
-./emsdk install latest
-echo "Activating latest emsdk..."
-./emsdk activate latest
+echo "Installing Emscripten 5.0.1..."
+./emsdk install 5.0.1
+echo "Activating Emscripten 5.0.1..."
+./emsdk activate 5.0.1
 
 source "$EMSDK_DIR/emsdk_env.sh"
 echo ""

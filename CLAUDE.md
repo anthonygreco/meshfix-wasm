@@ -74,7 +74,7 @@ Tests run in the browser, not Node.js. Start the dev server with `npm run serve`
 ## Critical Build Details
 
 - **PMP Library v3.0.0** as git submodule at `third_party/pmp-library/` — requires C++20
-- **Emscripten 5.0.1** installed locally at `./emsdk/` (gitignored)
+- **Emscripten 5.0.1** pinned in `scripts/install-emsdk.sh` (`./emsdk install 5.0.1`); installed locally at `./emsdk/` (gitignored)
 - `-fexceptions` must be on BOTH compile and link flags (PMP's setting doesn't propagate)
 - `-sEXPORT_EXCEPTION_HANDLING_HELPERS=1` required for `getExceptionMessage()` in JS
 - `-sEXPORTED_RUNTIME_METHODS=['FS','getExceptionMessage']` exposes both FS and exception helpers
