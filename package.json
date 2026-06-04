@@ -40,7 +40,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/anthonygreco/meshfix-wasm.git"
+    "url": "git+https://github.com/anthonygreco/meshfix-wasm.git"
   },
   "homepage": "https://github.com/anthonygreco/meshfix-wasm",
   "bugs": {
