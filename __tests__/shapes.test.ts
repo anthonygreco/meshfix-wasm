@@ -115,4 +115,13 @@ describe('Test Shape Loading', () => {
       expect(analysis.nonManifoldVertexCount).toBeGreaterThan(0);
     });
   });
+
+  describe('icosphere6 (high-poly)', () => {
+    it('loads and has correct face count (81,920)', () => {
+      expect(analyzer.loadTestShape('icosphere6')).toBe(true);
+      const stats = analyzer.getStats();
+      expect(stats.faceCount).toBe(81920);
+      expect(stats.isTriangleMesh).toBe(true);
+    });
+  });
 });

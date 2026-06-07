@@ -74,6 +74,8 @@ const meshfix = await MeshFixWorker.init(options?);
 | `reanalyze()` | `{ analysis, issues }` | Re-analyze after modifications |
 | `exportMesh(format?)` | `ArrayBuffer` | Export as `"stl"`, `"obj"`, or `"off"` |
 | `toRenderData()` | `RenderData` | Get vertex/index buffers for 3D rendering |
+| `scale(factor)` | `void` | Scale all vertex positions by a scalar factor |
+| `decimate(options)` | `DecimateResult` | Reduce triangle count using QEM decimation |
 | `dispose()` | `void` | Terminate worker and free memory |
 
 ### `MeshFix` (main thread)
@@ -104,6 +106,43 @@ The `repair()` method runs these steps in order:
 3. **Split vertices** — fix non-manifold (bowtie) vertices
 4. **Fill holes** — close boundary loops with fan triangulation
 5. **Fix normals** — orient all faces outward using signed volume
+
+### Decimation
+
+Reduce triangle count while preserving shape, using PMP Library's QEM (Quadric Error Metric) decimator. Particularly useful for AI-generated or photogrammetry meshes that are too dense for slicers.
+
+```typescript
+// Target vertex count
+const result = await meshfix.decimate({ targetVertices: 5000 });
+
+// Target face count (converted internally via V = ⌈(F+4)/2⌉)
+const result = await meshfix.decimate({ targetFaces: 10000 });
+
+// Target ratio — keep 25% of current vertices
+const result = await meshfix.decimate({ targetRatio: 0.25 });
+
+// With print-tolerance bound: never deviate more than 0.1 model units from the original surface
+const result = await meshfix.decimate({ targetRatio: 0.1, hausdorffError: 0.1 });
+
+console.log(`${result.facesBefore} → ${result.facesAfter} faces`);
+console.log(result.reachedTarget ? 'Hit target' : 'Stopped early (constraints)');
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `targetVertices` | `number` | Exact target vertex count. Exactly one of the three targets must be set. |
+| `targetFaces` | `number` | Target face count (converted to vertices internally). |
+| `targetRatio` | `number` | Fraction (0–1 exclusive) of current vertex count to keep. |
+| `hausdorffError` | `number` | Max deviation from original surface in model units (0 = off). The print-tolerance bound. |
+| `normalDeviation` | `number` | Max face-normal deviation in degrees (0 = off). |
+| `aspectRatio` | `number` | Minimum triangle aspect ratio (0 = off). |
+
+**Notes:**
+- Quad meshes (OBJ/OFF imports, `pmp::torus()`) are auto-triangulated before decimation.
+- If quality constraints prevent reaching the target, decimation stops early without error — check `result.reachedTarget`.
+- Best results on repaired (watertight, manifold) meshes. Run `repair()` first when working with user-uploaded files.
 
 ### Progress Callbacks
 

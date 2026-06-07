@@ -71,6 +71,30 @@ export interface FillHolesResult {
   facesAdded: number;
 }
 
+export interface DecimateOptions {
+  /** Exact target vertex count. Exactly one of targetVertices / targetFaces / targetRatio must be set. */
+  targetVertices?: number;
+  /** Target face count → converted to vertices via V = ceil((F + 4) / 2). */
+  targetFaces?: number;
+  /** Fraction (0–1 exclusive) of current vertex count to keep. */
+  targetRatio?: number;
+  /** Minimum triangle aspect ratio constraint (0 = off). */
+  aspectRatio?: number;
+  /** Maximum face-normal deviation in degrees (0 = off). */
+  normalDeviation?: number;
+  /** Maximum deviation from original surface in model units — the print-tolerance bound (0 = off). */
+  hausdorffError?: number;
+}
+
+export interface DecimateResult {
+  verticesBefore: number;
+  verticesAfter: number;
+  facesBefore: number;
+  facesAfter: number;
+  /** True if verticesAfter <= resolved target. False means constraints stopped decimation early. */
+  reachedTarget: boolean;
+}
+
 export interface SplitVerticesResult {
   verticesBefore: number;
   verticesAfter: number;
@@ -142,6 +166,7 @@ export interface MeshAnalyzerInstance {
   isLoaded(): boolean;
   exportMesh(path: string): boolean;
   scale(factor: number): boolean;
+  decimate(targetVertices: number, aspectRatio: number, normalDeviation: number, hausdorffError: number): { success: boolean; verticesBefore: number; verticesAfter: number; facesBefore: number; facesAfter: number };
   colorsDropped(): boolean;
   writeRenderData(path: string): boolean;
   getLastError(): string;

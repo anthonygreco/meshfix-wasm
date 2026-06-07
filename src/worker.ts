@@ -174,6 +174,32 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
       return true;
     }
 
+    case "decimate": {
+      if (!analyzer.isLoaded()) throw new Error("No mesh loaded");
+      // Resolve target to vertex count (classic worker — no imports, logic duplicated from index.ts)
+      const opts = params as { targetVertices?: number; targetFaces?: number; targetRatio?: number; aspectRatio?: number; normalDeviation?: number; hausdorffError?: number };
+      const defined = [opts.targetVertices, opts.targetFaces, opts.targetRatio].filter(v => v !== undefined);
+      if (defined.length !== 1) throw new TypeError("Exactly one of targetVertices, targetFaces, or targetRatio must be provided");
+      var targetVertices: number;
+      if (opts.targetVertices !== undefined) {
+        targetVertices = opts.targetVertices;
+      } else if (opts.targetFaces !== undefined) {
+        targetVertices = Math.ceil((opts.targetFaces + 4) / 2);
+      } else {
+        if (opts.targetRatio! <= 0 || opts.targetRatio! >= 1) throw new TypeError("targetRatio must be in (0, 1)");
+        targetVertices = Math.max(4, Math.round(analyzer.getVertexCount() * opts.targetRatio!));
+      }
+      var raw = analyzer.decimate(targetVertices, opts.aspectRatio ?? 0, opts.normalDeviation ?? 0, opts.hausdorffError ?? 0);
+      if (!raw.success) throw new Error(analyzer.getLastError() || "Failed to decimate mesh");
+      return {
+        verticesBefore: raw.verticesBefore,
+        verticesAfter: raw.verticesAfter,
+        facesBefore: raw.facesBefore,
+        facesAfter: raw.facesAfter,
+        reachedTarget: raw.verticesAfter <= targetVertices,
+      };
+    }
+
     case "colorsDropped": {
       return analyzer.colorsDropped();
     }

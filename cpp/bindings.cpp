@@ -4,6 +4,8 @@
 #include <pmp/algorithms/shapes.h>
 #include <pmp/algorithms/differential_geometry.h>
 #include <pmp/algorithms/normals.h>
+#include <pmp/algorithms/decimation.h>
+#include <pmp/algorithms/triangulation.h>
 #include "happly.h"
 #include <string>
 #include <cmath>
@@ -294,6 +296,14 @@ struct FillHolesResult {
     int facesAdded;
 };
 
+struct DecimateResult {
+    bool success;
+    int verticesBefore;
+    int verticesAfter;
+    int facesBefore;
+    int facesAfter;
+};
+
 struct SplitVerticesResult {
     int verticesBefore;
     int verticesAfter;
@@ -418,8 +428,14 @@ public:
             mesh_ = pmp::SurfaceMesh();
             skippedFaces_ = 0;
             lastError_.clear();
-            if (name == "icosphere") {
-                mesh_ = pmp::icosphere(3);
+            if (name == "icosphere" || name.rfind("icosphere", 0) == 0) {
+                // "icosphere" = level 3; "icosphere5"/"icosphere6"/"icosphere7" for high-poly
+                int level = 3;
+                if (name.length() > 9) {
+                    int parsed = std::stoi(name.substr(9));
+                    level = std::max(0, std::min(7, parsed));
+                }
+                mesh_ = pmp::icosphere(level);
             } else if (name == "torus") {
                 mesh_ = pmp::torus();
             } else if (name == "tetrahedron") {
@@ -1326,6 +1342,54 @@ public:
         }
     }
 
+    DecimateResult decimate(int targetVertices, double aspectRatio,
+                            double normalDeviation, double hausdorffError) {
+        DecimateResult result{false, 0, 0, 0, 0};
+        if (!loaded_) {
+            lastError_ = "No mesh loaded";
+            return result;
+        }
+        if (targetVertices < 4) {
+            lastError_ = "Target vertex count must be at least 4";
+            return result;
+        }
+        try {
+            // Auto-triangulate quads (e.g. OBJ/OFF imports, pmp::torus())
+            if (!mesh_.is_triangle_mesh()) {
+                pmp::triangulate(mesh_);
+            }
+            result.verticesBefore = static_cast<int>(mesh_.n_vertices());
+            result.facesBefore = static_cast<int>(mesh_.n_faces());
+
+            // No-op short-circuit: already at or below target
+            if (targetVertices >= result.verticesBefore) {
+                result.verticesAfter = result.verticesBefore;
+                result.facesAfter = result.facesBefore;
+                result.success = true;
+                return result;
+            }
+
+            pmp::decimate(mesh_,
+                          static_cast<unsigned int>(targetVertices),
+                          static_cast<pmp::Scalar>(aspectRatio),
+                          /*edge_length=*/0,
+                          /*max_valence=*/0,
+                          static_cast<pmp::Scalar>(normalDeviation),
+                          static_cast<pmp::Scalar>(hausdorffError));
+
+            result.verticesAfter = static_cast<int>(mesh_.n_vertices());
+            result.facesAfter = static_cast<int>(mesh_.n_faces());
+            result.success = true;
+            return result;
+        } catch (const std::exception& e) {
+            lastError_ = e.what();
+            return result;
+        } catch (...) {
+            lastError_ = "Unknown error during decimation";
+            return result;
+        }
+    }
+
     bool writeRenderData(const std::string& path) {
         if (!loaded_) {
             lastError_ = "No mesh loaded";
@@ -1622,6 +1686,13 @@ EMSCRIPTEN_BINDINGS(meshfix_core) {
         .field("degenerateFaces", &WeldResult::degenerateFaces)
         .field("skippedFaces", &WeldResult::skippedFaces);
 
+    value_object<DecimateResult>("DecimateResult")
+        .field("success", &DecimateResult::success)
+        .field("verticesBefore", &DecimateResult::verticesBefore)
+        .field("verticesAfter", &DecimateResult::verticesAfter)
+        .field("facesBefore", &DecimateResult::facesBefore)
+        .field("facesAfter", &DecimateResult::facesAfter);
+
     value_object<RemoveDegeneratesResult>("RemoveDegeneratesResult")
         .field("facesBefore", &RemoveDegeneratesResult::facesBefore)
         .field("facesAfter", &RemoveDegeneratesResult::facesAfter)
@@ -1713,6 +1784,7 @@ EMSCRIPTEN_BINDINGS(meshfix_core) {
         .function("getLastError", &MeshAnalyzer::getLastError)
         .function("exportMesh", &MeshAnalyzer::exportMesh)
         .function("scale", &MeshAnalyzer::scale)
+        .function("decimate", &MeshAnalyzer::decimate)
         .function("colorsDropped", &MeshAnalyzer::colorsDropped)
         .function("writeRenderData", &MeshAnalyzer::writeRenderData);
 }

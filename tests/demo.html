@@ -107,6 +107,21 @@
     <span style="font-size:13px; color:#555;">Runs: weld &rarr; remove degenerates &rarr; split vertices &rarr; fill holes &rarr; fix normals</span>
   </div>
 
+  <div class="repair-controls" style="background:#fff3e0; border-color:#ffcc80;">
+    <label>Target:</label>
+    <select id="decimate-mode" style="padding:6px 8px; border:1px solid #ccc; border-radius:4px; font-size:14px;">
+      <option value="ratio">Ratio</option>
+      <option value="vertices">Vertices</option>
+      <option value="faces">Faces</option>
+    </select>
+    <input type="number" id="decimate-value" value="0.25" step="0.01" min="0.01" style="width:100px; padding:6px 8px; border:1px solid #ccc; border-radius:4px; font-size:14px;">
+    <label style="margin-left:8px;">Hausdorff:</label>
+    <input type="number" id="decimate-hausdorff" value="0" step="0.01" min="0" style="width:80px; padding:6px 8px; border:1px solid #ccc; border-radius:4px; font-size:14px;" title="Max surface deviation in model units (0 = off)">
+    <button id="btn-decimate" disabled style="background:#e65100; font-weight:700;">Decimate</button>
+    <span style="font-size:13px; color:#555;">Reduce polygon count (QEM)</span>
+  </div>
+  <div id="decimate-result" style="display:none; margin-bottom:16px; padding:10px 14px; border-radius:4px; background:#fff3e0; color:#e65100; font-weight:600; font-size:14px;"></div>
+
   <div class="repair-controls" style="background:#e3f2fd; border-color:#90caf9;">
     <label>Format:</label>
     <select id="export-format" style="padding:6px 8px; border:1px solid #ccc; border-radius:4px; font-size:14px;">
@@ -445,6 +460,11 @@
     const fillResultEl = document.getElementById('fill-result');
     const repairBtn = document.getElementById('btn-repair');
     const repairResultEl = document.getElementById('repair-result');
+    const decimateBtn = document.getElementById('btn-decimate');
+    const decimateModeSelect = document.getElementById('decimate-mode');
+    const decimateValueInput = document.getElementById('decimate-value');
+    const decimateHausdorffInput = document.getElementById('decimate-hausdorff');
+    const decimateResultEl = document.getElementById('decimate-result');
     const downloadBtn = document.getElementById('btn-download');
     const exportFormatSelect = document.getElementById('export-format');
     const overlayToggle = document.getElementById('overlay-toggle');
@@ -649,6 +669,7 @@
       splitVertsBtn.disabled = false;
       fillHolesBtn.disabled = false;
       repairBtn.disabled = false;
+      decimateBtn.disabled = false;
       downloadBtn.disabled = false;
     }
 
@@ -973,6 +994,78 @@
         showBeforeAfterToggle();
       } catch (e) {
         showError('Repair error: ' + errorMsg(e));
+      }
+    });
+
+    // Decimate mode → value label hint
+    decimateModeSelect.addEventListener('change', () => {
+      const mode = decimateModeSelect.value;
+      if (mode === 'ratio') {
+        decimateValueInput.value = '0.25';
+        decimateValueInput.step = '0.01';
+        decimateValueInput.min = '0.01';
+        decimateValueInput.max = '0.99';
+      } else {
+        decimateValueInput.value = '5000';
+        decimateValueInput.step = '100';
+        decimateValueInput.min = '4';
+        decimateValueInput.removeAttribute('max');
+      }
+    });
+
+    // Decimate handler
+    decimateBtn.addEventListener('click', async () => {
+      if (!useWorker && (!analyzer || !analyzer.isLoaded())) {
+        showError('No mesh loaded. Load a file or test shape first.');
+        return;
+      }
+      try {
+        decimateResultEl.style.display = 'block';
+        decimateResultEl.textContent = 'Decimating…';
+        decimateResultEl.style.background = '#fff3cd';
+        decimateResultEl.style.color = '#856404';
+
+        const mode = decimateModeSelect.value;
+        const val = parseFloat(decimateValueInput.value);
+        const hausdorff = parseFloat(decimateHausdorffInput.value) || 0;
+        const opts = { hausdorffError: hausdorff };
+        if (mode === 'ratio') opts.targetRatio = val;
+        else if (mode === 'faces') opts.targetFaces = Math.round(val);
+        else opts.targetVertices = Math.round(val);
+
+        let r;
+        if (useWorker && workerInstance) {
+          r = await workerInstance.decimate(opts);
+        } else {
+          if (!analyzer.isLoaded()) throw new Error('No mesh loaded');
+          // Raw C++ call on main thread (no options sugar)
+          let targetV;
+          if (mode === 'ratio') targetV = Math.max(4, Math.round(analyzer.getVertexCount() * val));
+          else if (mode === 'faces') targetV = Math.ceil((Math.round(val) + 4) / 2);
+          else targetV = Math.round(val);
+          const raw = analyzer.decimate(targetV, 0, 0, hausdorff);
+          if (!raw.success) throw new Error(analyzer.getLastError() || 'Decimate failed');
+          r = { ...raw, reachedTarget: raw.verticesAfter <= targetV };
+        }
+
+        decimateResultEl.textContent =
+          'Decimate: ' + r.verticesBefore.toLocaleString() + ' verts / ' + r.facesBefore.toLocaleString() + ' faces' +
+          ' → ' + r.verticesAfter.toLocaleString() + ' verts / ' + r.facesAfter.toLocaleString() + ' faces' +
+          (r.reachedTarget ? '' : ' (stopped early—constraints)');
+        decimateResultEl.style.background = '#fff3e0';
+        decimateResultEl.style.color = '#e65100';
+
+        if (useWorker && workerInstance) {
+          const result = await workerInstance.reanalyze();
+          showAnalysis(result.analysis);
+        } else {
+          showAnalysis(analyzer.getAnalysis());
+        }
+        await updateViewport(false);
+        showBeforeAfterToggle();
+      } catch (e) {
+        decimateResultEl.style.display = 'none';
+        showError('Decimate error: ' + errorMsg(e));
       }
     });
 

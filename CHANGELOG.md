@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- **Decimate**: `decimate(options)` reduces the triangle count of a mesh using PMP Library's QEM (Quadric Error Metric) decimator. Accepts `targetVertices`, `targetFaces` (converted via V = ⌈(F+4)/2⌉), or `targetRatio` (fraction of current vertex count). Optional quality constraints: `hausdorffError` (maximum deviation from original surface in model units — the print-tolerance bound), `normalDeviation` (max face-normal deviation in degrees), and `aspectRatio` (minimum triangle aspect ratio). Quads are auto-triangulated before decimation. Early stop (constraints prevent reaching target) is not an error — `reachedTarget: false` in the result indicates this. Exposed on `MeshFix` (sync), `MeshFixWorker` (async), and the raw `MeshAnalyzer` Embind class.
+- **High-poly test shapes**: `loadTestShape("icosphereN")` now accepts levels 0–7 (e.g. `"icosphere6"` = 81,920 faces, `"icosphere7"` = 327,680 faces). Bare `"icosphere"` stays level 3 for back-compat.
+- WASM binary grows ~162KB (decimation.cpp + triangulation.cpp linked in).
+- 34 new tests: 15 in `decimate.test.ts`, 2 in `decimate-stress.test.ts` (icosphere6 default; icosphere7 gated on `MESHFIX_SLOW=1`), 8 in `decimate-spike.test.ts`, 1 in `shapes.test.ts`.
+
 ## 0.2.0
 
 - **PLY import**: `loadFromFile("/tmp/input.ply")` now reads ASCII and binary PLY meshes via happly (header-only, MIT). Vertex colour properties (red/green/blue etc.) are accepted but discarded — geometry only. Use `colorsDropped()` to detect whether a file had colours.

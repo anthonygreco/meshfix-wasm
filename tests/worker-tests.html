@@ -360,6 +360,19 @@
           pass("ArrayBuffer detached after transfer (byteLength=0)");
         } catch (e) { fail("ArrayBuffer detachment", e); }
 
+        // --- Decimation ---
+        section("Decimation");
+
+        try {
+          await worker.analyzeTestShape("icosphere"); // 642v, 1280f
+          const r = await worker.decimate({ targetVertices: 100 });
+          assertEqual(r.verticesBefore, 642, "verticesBefore");
+          assert(r.verticesAfter <= 100, "verticesAfter <= 100 (got " + r.verticesAfter + ")");
+          assert(r.facesAfter < 1280, "facesAfter reduced (got " + r.facesAfter + ")");
+          assert(r.reachedTarget === true, "reachedTarget true");
+          pass("decimate() icosphere 642v → " + r.verticesAfter + "v / " + r.facesAfter + "f");
+        } catch (e) { fail("decimate icosphere", e); }
+
         // --- Worker lifecycle ---
         section("Worker Lifecycle");
 

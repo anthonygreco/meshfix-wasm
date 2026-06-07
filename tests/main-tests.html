@@ -399,6 +399,19 @@
           pass("faceFlags: bowtie has non-zero flags (issues detected)");
         } catch (e) { fail("faceFlags bowtie", e); }
 
+        // --- Decimation ---
+        section("Decimation");
+
+        try {
+          mf.analyzeTestShape("icosphere"); // 642v, 1280f
+          const r = mf.decimate({ targetVertices: 100 });
+          assertEqual(r.verticesBefore, 642, "verticesBefore");
+          assert(r.verticesAfter <= 100, "verticesAfter <= 100 (got " + r.verticesAfter + ")");
+          assert(r.facesAfter < 1280, "facesAfter reduced (got " + r.facesAfter + ")");
+          assert(r.reachedTarget === true, "reachedTarget true");
+          pass("decimate() icosphere 642v → " + r.verticesAfter + "v / " + r.facesAfter + "f");
+        } catch (e) { fail("decimate icosphere", e); }
+
         // --- Backward compatibility ---
         section("Backward Compatibility");
 

@@ -11,6 +11,8 @@ import type {
   ProgressEvent,
   RenderData,
   ImportFormat,
+  DecimateOptions,
+  DecimateResult,
 } from "./types.js";
 import type { WorkerInitOptions } from "./worker-types.js";
 import { WorkerBridge, type ProgressCallback } from "./worker-bridge.js";
@@ -96,6 +98,18 @@ export class MeshFixWorker {
 
   async scale(factor: number): Promise<void> {
     await this.bridge.call("scale", { factor });
+  }
+
+  async decimate(options: DecimateOptions): Promise<DecimateResult> {
+    // Validate client-side so bad options fail before the worker round-trip
+    const defined = [options.targetVertices, options.targetFaces, options.targetRatio].filter(v => v !== undefined);
+    if (defined.length !== 1) {
+      throw new TypeError("Exactly one of targetVertices, targetFaces, or targetRatio must be provided");
+    }
+    if (options.targetRatio !== undefined && (options.targetRatio <= 0 || options.targetRatio >= 1)) {
+      throw new TypeError("targetRatio must be in the range (0, 1) exclusive");
+    }
+    return (await this.bridge.call("decimate", { ...options })) as DecimateResult;
   }
 
   async colorsDropped(): Promise<boolean> {

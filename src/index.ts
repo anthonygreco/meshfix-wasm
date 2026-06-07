@@ -14,11 +14,39 @@ import type {
   ProgressEvent,
   RenderData,
   ImportFormat,
+  DecimateOptions,
+  DecimateResult,
 } from "./types.js";
 import { buildIssues } from "./issues.js";
 
-export type { MeshStats, MeshAnalysis, MeshIssue, MeshFixCoreModule, MeshAnalyzerInstance, WeldResult, RemoveDegeneratesResult, FixNormalsResult, FillHolesResult, SplitVerticesResult, RepairResult, RepairOptions, ProgressEvent, RenderData };
+export type { MeshStats, MeshAnalysis, MeshIssue, MeshFixCoreModule, MeshAnalyzerInstance, WeldResult, RemoveDegeneratesResult, FixNormalsResult, FillHolesResult, SplitVerticesResult, RepairResult, RepairOptions, ProgressEvent, RenderData, DecimateOptions, DecimateResult };
 export type { IssueType, IssueSeverity, RepairStep, ImportFormat } from "./types.js";
+
+/** Resolve DecimateOptions to a raw target vertex count, throwing TypeError on invalid input. */
+function resolveDecimateTarget(options: DecimateOptions, currentVertices: number, currentFaces: number): number {
+  const defined = [options.targetVertices, options.targetFaces, options.targetRatio].filter(v => v !== undefined);
+  if (defined.length !== 1) {
+    throw new TypeError("Exactly one of targetVertices, targetFaces, or targetRatio must be provided");
+  }
+  if (options.targetVertices !== undefined) {
+    if (!Number.isInteger(options.targetVertices) || options.targetVertices < 1) {
+      throw new TypeError("targetVertices must be a positive integer");
+    }
+    return options.targetVertices;
+  }
+  if (options.targetFaces !== undefined) {
+    if (!Number.isInteger(options.targetFaces) || options.targetFaces < 1) {
+      throw new TypeError("targetFaces must be a positive integer");
+    }
+    // F ≈ 2V − 4 for closed manifold triangle meshes → V = ceil((F + 4) / 2)
+    return Math.ceil((options.targetFaces + 4) / 2);
+  }
+  // targetRatio
+  if (options.targetRatio! <= 0 || options.targetRatio! >= 1) {
+    throw new TypeError("targetRatio must be in the range (0, 1) exclusive");
+  }
+  return Math.max(4, Math.round(currentVertices * options.targetRatio!));
+}
 export { buildIssues } from "./issues.js";
 export { MeshFixWorker } from "./worker-client.js";
 export type { WorkerInitOptions } from "./worker-types.js";
@@ -240,6 +268,27 @@ export class MeshFix {
     if (!ok) {
       throw new Error(this.analyzer.getLastError() || "Failed to scale mesh");
     }
+  }
+
+  decimate(options: DecimateOptions): DecimateResult {
+    if (!this.analyzer.isLoaded()) {
+      throw new Error("No mesh loaded");
+    }
+    const targetVertices = resolveDecimateTarget(options, this.analyzer.getVertexCount(), this.analyzer.getFaceCount());
+    const aspectRatio = options.aspectRatio ?? 0;
+    const normalDeviation = options.normalDeviation ?? 0;
+    const hausdorffError = options.hausdorffError ?? 0;
+    const raw = this.analyzer.decimate(targetVertices, aspectRatio, normalDeviation, hausdorffError);
+    if (!raw.success) {
+      throw new Error(this.analyzer.getLastError() || "Failed to decimate mesh");
+    }
+    return {
+      verticesBefore: raw.verticesBefore,
+      verticesAfter: raw.verticesAfter,
+      facesBefore: raw.facesBefore,
+      facesAfter: raw.facesAfter,
+      reachedTarget: raw.verticesAfter <= targetVertices,
+    };
   }
 
   colorsDropped(): boolean {

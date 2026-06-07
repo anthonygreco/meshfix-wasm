@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Client-side 3D mesh repair library. PMP Library (C++) compiled to WebAssembly via Emscripten, with TypeScript API for browser use. Supports STL/OBJ/OFF import and export, mesh analysis, and automated repair pipeline.
+Client-side 3D mesh repair and decimation library. PMP Library (C++) compiled to WebAssembly via Emscripten, with TypeScript API for browser use. Supports STL/OBJ/OFF/PLY import and export, mesh analysis, automated repair pipeline, and QEM mesh decimation.
 
 ## Build Commands
 
@@ -55,7 +55,7 @@ Tests run in the browser, not Node.js. Start the dev server with `npm run serve`
 |------|---------|
 | `cpp/bindings.cpp` | All C++ logic: Embind bindings, I/O, analysis, repairs |
 | `cpp/CMakeLists.txt` | WASM build config with critical flags |
-| `src/index.ts` | MeshFix class (main thread API) + re-exports |
+| `src/index.ts` | MeshFix class (main thread API) + re-exports + resolveDecimateTarget() |
 | `src/types.ts` | TypeScript interfaces (MeshStats, MeshAnalysis, RenderData, etc.) |
 | `src/worker-client.ts` | MeshFixWorker class (async worker API) |
 | `src/worker-bridge.ts` | Promise-based postMessage RPC |
