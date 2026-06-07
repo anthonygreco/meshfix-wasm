@@ -10,16 +10,19 @@ import type {
   RepairOptions,
   ProgressEvent,
   RenderData,
+  ImportFormat,
 } from "./types.js";
 import type { WorkerInitOptions } from "./worker-types.js";
 import { WorkerBridge, type ProgressCallback } from "./worker-bridge.js";
 import { buildIssues } from "./issues.js";
 
-export type ExportFormat = "stl" | "obj" | "off";
+export type ExportFormat = "stl" | "obj" | "off" | "ply";
+export type { ImportFormat };
 
 export interface AnalysisResult {
   analysis: MeshAnalysis;
   issues: import("./types.js").MeshIssue[];
+  colorsDropped?: boolean;
 }
 
 export class MeshFixWorker {
@@ -40,13 +43,13 @@ export class MeshFixWorker {
     return instance;
   }
 
-  async analyze(data: ArrayBuffer): Promise<MeshStats> {
-    return (await this.bridge.call("analyze", { buffer: data }, [data])) as MeshStats;
+  async analyze(data: ArrayBuffer, format: ImportFormat = "stl"): Promise<MeshStats> {
+    return (await this.bridge.call("analyze", { buffer: data, format }, [data])) as MeshStats;
   }
 
-  async analyzeDetailed(data: ArrayBuffer): Promise<AnalysisResult> {
-    const analysis = (await this.bridge.call("analyzeDetailed", { buffer: data }, [data])) as MeshAnalysis;
-    return { analysis, issues: buildIssues(analysis) };
+  async analyzeDetailed(data: ArrayBuffer, format: ImportFormat = "stl"): Promise<AnalysisResult> {
+    const result = (await this.bridge.call("analyzeDetailed", { buffer: data, format }, [data])) as { analysis: MeshAnalysis; colorsDropped: boolean };
+    return { analysis: result.analysis, issues: buildIssues(result.analysis), colorsDropped: result.colorsDropped };
   }
 
   async analyzeTestShape(name: string): Promise<MeshStats> {
@@ -87,8 +90,16 @@ export class MeshFixWorker {
   }
 
   async reanalyze(): Promise<AnalysisResult> {
-    const analysis = (await this.bridge.call("reanalyze")) as MeshAnalysis;
-    return { analysis, issues: buildIssues(analysis) };
+    const result = (await this.bridge.call("reanalyze")) as { analysis: MeshAnalysis; colorsDropped: boolean };
+    return { analysis: result.analysis, issues: buildIssues(result.analysis), colorsDropped: result.colorsDropped };
+  }
+
+  async scale(factor: number): Promise<void> {
+    await this.bridge.call("scale", { factor });
+  }
+
+  async colorsDropped(): Promise<boolean> {
+    return (await this.bridge.call("colorsDropped")) as boolean;
   }
 
   async toRenderData(): Promise<RenderData> {

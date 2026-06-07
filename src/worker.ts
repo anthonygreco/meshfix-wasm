@@ -46,7 +46,8 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
 
     case "analyze": {
       const uint8 = new Uint8Array(buffer!);
-      const path = "/tmp/input.stl";
+      const fmt = (params.format as string) || "stl";
+      const path = "/tmp/input." + fmt;
       try {
         module.FS.writeFile(path, uint8);
         const ok = analyzer.loadFromFile(path);
@@ -59,12 +60,14 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
 
     case "analyzeDetailed": {
       const uint8 = new Uint8Array(buffer!);
-      const path = "/tmp/input.stl";
+      const fmt = (params.format as string) || "stl";
+      const path = "/tmp/input." + fmt;
       try {
         module.FS.writeFile(path, uint8);
         const ok = analyzer.loadFromFile(path);
         if (!ok) throw new Error(analyzer.getLastError() || "Failed to load mesh");
-        return analyzer.getAnalysis();
+        const analysis = analyzer.getAnalysis();
+        return { analysis, colorsDropped: analyzer.colorsDropped() };
       } finally {
         try { module.FS.unlink(path); } catch {}
       }
@@ -159,7 +162,20 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
 
     case "reanalyze": {
       if (!analyzer.isLoaded()) throw new Error("No mesh loaded");
-      return analyzer.getAnalysis();
+      const analysis = analyzer.getAnalysis();
+      return { analysis, colorsDropped: analyzer.colorsDropped() };
+    }
+
+    case "scale": {
+      if (!analyzer.isLoaded()) throw new Error("No mesh loaded");
+      const factor = params.factor as number;
+      const ok = analyzer.scale(factor);
+      if (!ok) throw new Error(analyzer.getLastError() || "Failed to scale mesh");
+      return true;
+    }
+
+    case "colorsDropped": {
+      return analyzer.colorsDropped();
     }
 
     case "toRenderData": {

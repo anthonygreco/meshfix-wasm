@@ -4,6 +4,7 @@
 #include <pmp/algorithms/shapes.h>
 #include <pmp/algorithms/differential_geometry.h>
 #include <pmp/algorithms/normals.h>
+#include "happly.h"
 #include <string>
 #include <cmath>
 #include <cstdio>
@@ -141,6 +142,107 @@ static int read_stl_robust(pmp::SurfaceMesh& mesh, const std::string& filepath) 
 
 // --- End STL reader ---
 
+// --- PLY reader (via happly) ---
+// Returns number of skipped (non-manifold) faces.
+// Sets colorsDropped to true if the file has any vertex colour properties.
+static int read_ply_robust(pmp::SurfaceMesh& mesh, const std::string& filepath, bool& colorsDropped) {
+    colorsDropped = false;
+    int skipped = 0;
+    try {
+        happly::PLYData plyIn(filepath);
+
+        // Detect vertex colour properties (any of the standard names)
+        bool hasColors = false;
+        if (plyIn.hasElement("vertex")) {
+            auto& el = plyIn.getElement("vertex");
+            auto props = el.getPropertyNames();
+            for (auto& p : props) {
+                if (p == "red" || p == "green" || p == "blue" ||
+                    p == "diffuse_red" || p == "diffuse_green" || p == "diffuse_blue" ||
+                    p == "r" || p == "g" || p == "b") {
+                    hasColors = true;
+                    break;
+                }
+            }
+        }
+        colorsDropped = hasColors;
+
+        // Read vertex positions
+        std::vector<float> xs = plyIn.getElement("vertex").getProperty<float>("x");
+        std::vector<float> ys = plyIn.getElement("vertex").getProperty<float>("y");
+        std::vector<float> zs = plyIn.getElement("vertex").getProperty<float>("z");
+
+        std::vector<pmp::Vertex> verts;
+        verts.reserve(xs.size());
+        for (size_t i = 0; i < xs.size(); ++i) {
+            verts.push_back(mesh.add_vertex(pmp::Point(xs[i], ys[i], zs[i])));
+        }
+
+        // Read faces
+        std::vector<std::vector<int>> faces;
+        if (plyIn.hasElement("face")) {
+            faces = plyIn.getElement("face").getListProperty<int>("vertex_indices");
+        }
+
+        for (auto& f : faces) {
+            if (f.size() < 3) continue;
+            // Triangulate if needed (fan triangulation)
+            for (size_t i = 1; i + 1 < f.size(); ++i) {
+                std::vector<pmp::Vertex> tri = { verts[f[0]], verts[f[i]], verts[f[i+1]] };
+                if (tri[0] == tri[1] || tri[0] == tri[2] || tri[1] == tri[2]) continue;
+                try {
+                    mesh.add_face(tri);
+                } catch (...) {
+                    ++skipped;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("PLY read error: ") + e.what());
+    }
+    return skipped;
+}
+
+// --- PLY writer (via happly) ---
+static void write_ply_binary(pmp::SurfaceMesh& mesh, const std::string& filepath) {
+    std::vector<float> xs, ys, zs;
+    xs.reserve(mesh.n_vertices());
+    ys.reserve(mesh.n_vertices());
+    zs.reserve(mesh.n_vertices());
+
+    // Build a contiguous index array from half-edge mesh
+    std::map<pmp::Vertex, size_t> idx;
+    size_t i = 0;
+    for (auto v : mesh.vertices()) {
+        auto p = mesh.position(v);
+        xs.push_back(p[0]);
+        ys.push_back(p[1]);
+        zs.push_back(p[2]);
+        idx[v] = i++;
+    }
+
+    std::vector<std::vector<int>> faces;
+    faces.reserve(mesh.n_faces());
+    for (auto f : mesh.faces()) {
+        std::vector<int> tri;
+        for (auto v : mesh.vertices(f)) {
+            tri.push_back(static_cast<int>(idx[v]));
+        }
+        faces.push_back(std::move(tri));
+    }
+
+    happly::PLYData plyOut;
+    plyOut.addElement("vertex", xs.size());
+    plyOut.getElement("vertex").addProperty<float>("x", xs);
+    plyOut.getElement("vertex").addProperty<float>("y", ys);
+    plyOut.getElement("vertex").addProperty<float>("z", zs);
+    plyOut.addElement("face", faces.size());
+    plyOut.getElement("face").addListProperty<int>("vertex_indices", faces);
+    plyOut.write(filepath, happly::DataFormat::Binary);
+}
+
+// --- End PLY reader/writer ---
+
 struct GridCell {
     int64_t ix, iy, iz;
     bool operator==(const GridCell& o) const {
@@ -260,12 +362,15 @@ struct MeshAnalysis {
 
 class MeshAnalyzer {
 public:
-    MeshAnalyzer() : loaded_(false), skippedFaces_(0) {}
+    MeshAnalyzer() : loaded_(false), skippedFaces_(0), colorsDropped_(false) {}
+
+    bool colorsDropped() const { return colorsDropped_; }
 
     bool loadFromFile(const std::string& path) {
         try {
             mesh_ = pmp::SurfaceMesh();
             skippedFaces_ = 0;
+            colorsDropped_ = false;
             lastError_.clear();
 
             // Check file extension
@@ -276,6 +381,13 @@ public:
             if (ext == ".stl") {
                 // Use our fault-tolerant STL reader
                 skippedFaces_ = read_stl_robust(mesh_, path);
+                if (skippedFaces_ > 0) {
+                    lastError_ = std::to_string(skippedFaces_) +
+                        " non-manifold face(s) skipped during import";
+                }
+            } else if (ext == ".ply") {
+                // Use happly-based PLY reader
+                skippedFaces_ = read_ply_robust(mesh_, path, colorsDropped_);
                 if (skippedFaces_ > 0) {
                     lastError_ = std::to_string(skippedFaces_) +
                         " non-manifold face(s) skipped during import";
@@ -1163,10 +1275,17 @@ public:
             return false;
         }
         try {
+            // PLY handled by happly
+            auto dot = path.rfind('.');
+            std::string ext = (dot != std::string::npos) ? path.substr(dot) : "";
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".ply") {
+                write_ply_binary(mesh_, path);
+                return true;
+            }
             pmp::IOFlags flags;
             // STL requires face normals and binary for compact output
-            if (path.size() >= 4 &&
-                path.compare(path.size() - 4, 4, ".stl") == 0) {
+            if (ext == ".stl") {
                 pmp::face_normals(mesh_);
                 flags.use_binary = true;
             }
@@ -1177,6 +1296,32 @@ public:
             return false;
         } catch (...) {
             lastError_ = "Unknown error exporting mesh";
+            return false;
+        }
+    }
+
+    bool scale(double factor) {
+        if (!loaded_) {
+            lastError_ = "No mesh loaded";
+            return false;
+        }
+        if (factor <= 0.0) {
+            lastError_ = "Scale factor must be positive";
+            return false;
+        }
+        try {
+            for (auto v : mesh_.vertices()) {
+                auto& p = mesh_.position(v);
+                p[0] = static_cast<pmp::Scalar>(p[0] * factor);
+                p[1] = static_cast<pmp::Scalar>(p[1] * factor);
+                p[2] = static_cast<pmp::Scalar>(p[2] * factor);
+            }
+            return true;
+        } catch (const std::exception& e) {
+            lastError_ = e.what();
+            return false;
+        } catch (...) {
+            lastError_ = "Unknown error scaling mesh";
             return false;
         }
     }
@@ -1444,6 +1589,7 @@ private:
     bool loaded_;
     std::string lastError_;
     int skippedFaces_;
+    bool colorsDropped_;
 };
 
 EMSCRIPTEN_BINDINGS(meshfix_core) {
@@ -1566,5 +1712,7 @@ EMSCRIPTEN_BINDINGS(meshfix_core) {
         .function("isLoaded", &MeshAnalyzer::isLoaded)
         .function("getLastError", &MeshAnalyzer::getLastError)
         .function("exportMesh", &MeshAnalyzer::exportMesh)
+        .function("scale", &MeshAnalyzer::scale)
+        .function("colorsDropped", &MeshAnalyzer::colorsDropped)
         .function("writeRenderData", &MeshAnalyzer::writeRenderData);
 }

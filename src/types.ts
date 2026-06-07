@@ -141,6 +141,8 @@ export interface MeshAnalyzerInstance {
   getFaceCount(): number;
   isLoaded(): boolean;
   exportMesh(path: string): boolean;
+  scale(factor: number): boolean;
+  colorsDropped(): boolean;
   writeRenderData(path: string): boolean;
   getLastError(): string;
   delete(): void;
@@ -158,6 +160,8 @@ export interface MeshFixCoreModule {
 }
 
 export type RepairStep = "weld" | "removeDegenerates" | "splitVertices" | "fillHoles" | "fixNormals";
+
+export type ImportFormat = "stl" | "obj" | "off" | "ply";
 
 export interface ProgressEvent {
   step: RepairStep;

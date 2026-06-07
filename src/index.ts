@@ -13,11 +13,12 @@ import type {
   RepairOptions,
   ProgressEvent,
   RenderData,
+  ImportFormat,
 } from "./types.js";
 import { buildIssues } from "./issues.js";
 
 export type { MeshStats, MeshAnalysis, MeshIssue, MeshFixCoreModule, MeshAnalyzerInstance, WeldResult, RemoveDegeneratesResult, FixNormalsResult, FillHolesResult, SplitVerticesResult, RepairResult, RepairOptions, ProgressEvent, RenderData };
-export type { IssueType, IssueSeverity, RepairStep } from "./types.js";
+export type { IssueType, IssueSeverity, RepairStep, ImportFormat } from "./types.js";
 export { buildIssues } from "./issues.js";
 export { MeshFixWorker } from "./worker-client.js";
 export type { WorkerInitOptions } from "./worker-types.js";
@@ -25,11 +26,12 @@ export type { WorkerInitOptions } from "./worker-types.js";
 // createMeshFixCore is loaded as a global from the WASM JS file
 declare function createMeshFixCore(): Promise<MeshFixCoreModule>;
 
-export type ExportFormat = "stl" | "obj" | "off";
+export type ExportFormat = "stl" | "obj" | "off" | "ply";
 
 export interface AnalysisResult {
   analysis: MeshAnalysis;
   issues: MeshIssue[];
+  colorsDropped?: boolean;
 }
 
 export class MeshFix {
@@ -46,9 +48,9 @@ export class MeshFix {
     return new MeshFix(module);
   }
 
-  analyze(data: ArrayBuffer): MeshStats {
+  analyze(data: ArrayBuffer, format: ImportFormat = "stl"): MeshStats {
     const uint8 = new Uint8Array(data);
-    const path = "/tmp/input.stl";
+    const path = `/tmp/input.${format}`;
 
     try {
       this.module.FS.writeFile(path, uint8);
@@ -78,9 +80,9 @@ export class MeshFix {
     return this.analyzer.getStats();
   }
 
-  analyzeDetailed(data: ArrayBuffer): AnalysisResult {
+  analyzeDetailed(data: ArrayBuffer, format: ImportFormat = "stl"): AnalysisResult {
     const uint8 = new Uint8Array(data);
-    const path = "/tmp/input.stl";
+    const path = `/tmp/input.${format}`;
 
     try {
       this.module.FS.writeFile(path, uint8);
@@ -91,7 +93,7 @@ export class MeshFix {
         );
       }
       const analysis = this.analyzer.getAnalysis();
-      return { analysis, issues: buildIssues(analysis) };
+      return { analysis, issues: buildIssues(analysis), colorsDropped: this.analyzer.colorsDropped() };
     } finally {
       try {
         this.module.FS.unlink(path);
@@ -228,6 +230,20 @@ export class MeshFix {
   /** @deprecated Use exportMesh("stl") instead */
   exportSTL(): ArrayBuffer {
     return this.exportMesh("stl");
+  }
+
+  scale(factor: number): void {
+    if (!this.analyzer.isLoaded()) {
+      throw new Error("No mesh loaded");
+    }
+    const ok = this.analyzer.scale(factor);
+    if (!ok) {
+      throw new Error(this.analyzer.getLastError() || "Failed to scale mesh");
+    }
+  }
+
+  colorsDropped(): boolean {
+    return this.analyzer.colorsDropped();
   }
 
   toRenderData(): RenderData {

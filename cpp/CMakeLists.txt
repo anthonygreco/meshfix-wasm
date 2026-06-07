@@ -3,6 +3,7 @@ add_executable(meshfix-core bindings.cpp)
 target_link_libraries(meshfix-core PRIVATE pmp)
 target_include_directories(meshfix-core PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/pmp-library/src
+    ${CMAKE_SOURCE_DIR}/third_party/happly
 )
 
 if(EMSCRIPTEN)
