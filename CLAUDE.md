@@ -27,6 +27,14 @@ rm -rf build && bash scripts/build-wasm.sh
 # Serve for testing (tests are browser-based HTML pages)
 npm run serve
 # Then open http://localhost:8080/tests/index.html
+
+# Release (patch / minor / major) — ALWAYS use npm version, never hand-edit package.json
+# The preversion hook runs build+test; postversion tags and pushes automatically.
+npm version patch   # 0.3.0 → 0.3.1
+npm version minor   # 0.3.0 → 0.4.0
+npm version major   # 0.3.0 → 1.0.0
+# Then publish (automation token bypasses 2FA; --ignore-scripts skips redundant rebuild):
+npm publish --ignore-scripts
 ```
 
 ## Testing
