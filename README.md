@@ -173,6 +173,50 @@ The `renderData.faceFlags` field contains per-face bitmask flags for issue visua
 | `0x08` | Boundary | Face has an open edge |
 | `0x10` | Non-manifold | Adjacent to a non-manifold vertex |
 
+## Framework Integration
+
+### Vite · React · Vue · SvelteKit
+
+The worker script and WASM binary must be served as **static files** — they can't be bundled like a regular npm import. Two reasons:
+
+1. **Classic Web Workers need a same-origin URL.** The `new Worker('/path/to/worker.js')` call requires a real HTTP path, not a bundled module.
+2. **WASM streaming requires the correct MIME type.** `WebAssembly.instantiateStreaming()` needs `Content-Type: application/wasm`, which static servers provide automatically but bundlers often don't.
+
+The recommended approach is a `postinstall` script that copies the three files into your `public/` directory:
+
+```js
+// scripts/copy-meshfix.js
+import { copyFileSync, mkdirSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const root = dirname(fileURLToPath(import.meta.url));
+const src  = resolve(root, '../node_modules/meshfix-wasm/dist');
+const dest = resolve(root, '../public/meshfix');
+
+mkdirSync(dest, { recursive: true });
+for (const f of ['worker.js', 'meshfix-core.js', 'meshfix-core.wasm']) {
+  copyFileSync(`${src}/${f}`, `${dest}/${f}`);
+}
+```
+
+```json
+// package.json
+{ "scripts": { "postinstall": "node scripts/copy-meshfix.js" } }
+```
+
+Add `public/meshfix/` to `.gitignore` — the files regenerate on every `npm install`.
+
+If you need non-default paths, pass them to `MeshFixWorker.init()`:
+
+```typescript
+const meshfix = await MeshFixWorker.init({
+  workerUrl: '/assets/meshfix/worker.js',
+  coreUrl:   '/assets/meshfix/meshfix-core.js',
+  wasmUrl:   '/assets/meshfix/meshfix-core.wasm',
+});
+```
+
 ## Browser Support
 
 Requires browsers with WebAssembly and Web Worker support:
