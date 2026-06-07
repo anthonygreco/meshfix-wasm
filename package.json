@@ -23,7 +23,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "npm run build",
-    "serve": "npx http-server . -p 8080 -c-1"
+    "serve": "npx http-server . -p 8080 -c-1",
+    "preversion": "npm test",
+    "version": "npm run build && git add -f dist/",
+    "postversion": "git push && git push --tags"
   },
   "keywords": [
     "wasm",
