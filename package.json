@@ -24,8 +24,7 @@
     "test:watch": "vitest",
     "prepublishOnly": "npm run build",
     "serve": "npx http-server . -p 8080 -c-1",
-    "preversion": "npm test",
-    "version": "npm run build && git add -f dist/",
+    "preversion": "npm run build && npm test",
     "postversion": "git push && git push --tags"
   },
   "keywords": [
