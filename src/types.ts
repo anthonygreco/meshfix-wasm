@@ -67,8 +67,29 @@ export interface FillHolesResult {
   holesFound: number;
   holesFilled: number;
   holesFailed: number;
+  /** Skipped for exceeding maxEdges. */
   holesSkipped: number;
   facesAdded: number;
+  /**
+   * Left alone because the loop looks like deliberate geometry (a bore, a slot,
+   * or the outer edge of an open shell) rather than damage. Show these to the
+   * user — describeHoles() explains each one — and offer fillHoles({ fillFeatures: true }).
+   */
+  holesSkippedAsFeature: number;
+}
+
+/** Per-boundary-loop measurements behind the holesSkippedAsFeature decision. */
+export interface HoleInfo {
+  edges: number;
+  /** Largest distance between any two vertices on the loop. */
+  diameter: number;
+  /** Max distance from the loop's best-fit plane, over diameter. */
+  planarDeviation: number;
+  /** Coefficient of variation of in-plane radius; ~0 is a circle. */
+  radiusVariation: number;
+  /** Coefficient of variation of edge length. Reported only — see looksDeliberate(). */
+  edgeVariation: number;
+  looksDeliberate: boolean;
 }
 
 export interface DecimateOptions {
@@ -91,6 +112,12 @@ export interface DecimateResult {
   verticesAfter: number;
   facesBefore: number;
   facesAfter: number;
+  /**
+   * Faces dropped because decimation left them referencing vertices that no
+   * longer exist. Normally 0; a non-zero value means the mesh was rebuilt to
+   * keep it traversable. See connectivityIsValid() in bindings.cpp.
+   */
+  facesDropped: number;
   /** True if verticesAfter <= resolved target. False means constraints stopped decimation early. */
   reachedTarget: boolean;
 }
@@ -159,6 +186,9 @@ export interface MeshAnalyzerInstance {
   removeDegenerates(minArea: number): RemoveDegeneratesResult;
   fixNormals(): FixNormalsResult;
   fillHoles(maxEdges: number): FillHolesResult;
+  fillHolesEx(maxEdges: number, fillFeatures: boolean): FillHolesResult;
+  /** JSON array of HoleInfo, one entry per boundary loop. */
+  describeHoles(): string;
   splitVertices(): SplitVerticesResult;
   repair(weldEpsilon: number, minArea: number, maxHoleEdges: number): RepairResult;
   getVertexCount(): number;
@@ -166,8 +196,9 @@ export interface MeshAnalyzerInstance {
   isLoaded(): boolean;
   exportMesh(path: string): boolean;
   scale(factor: number): boolean;
-  decimate(targetVertices: number, aspectRatio: number, normalDeviation: number, hausdorffError: number): { success: boolean; verticesBefore: number; verticesAfter: number; facesBefore: number; facesAfter: number };
+  decimate(targetVertices: number, aspectRatio: number, normalDeviation: number, hausdorffError: number): { success: boolean; verticesBefore: number; verticesAfter: number; facesBefore: number; facesAfter: number; facesDropped: number };
   colorsDropped(): boolean;
+  nonFiniteFacesRemoved(): number;
   writeRenderData(path: string): boolean;
   getLastError(): string;
   delete(): void;

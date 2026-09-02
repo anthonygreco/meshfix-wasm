@@ -16,9 +16,11 @@ import type {
   ImportFormat,
   DecimateOptions,
   DecimateResult,
+  HoleInfo,
 } from "./types.js";
 import { buildIssues } from "./issues.js";
 
+export type { HoleInfo };
 export type { MeshStats, MeshAnalysis, MeshIssue, MeshFixCoreModule, MeshAnalyzerInstance, WeldResult, RemoveDegeneratesResult, FixNormalsResult, FillHolesResult, SplitVerticesResult, RepairResult, RepairOptions, ProgressEvent, RenderData, DecimateOptions, DecimateResult };
 export type { IssueType, IssueSeverity, RepairStep, ImportFormat } from "./types.js";
 
@@ -163,11 +165,33 @@ export class MeshFix {
     return this.analyzer.fixNormals();
   }
 
-  fillHoles(maxEdges: number = 100): FillHolesResult {
+  /**
+   * Fill boundary loops that look like damage. Loops that look like deliberate
+   * geometry are reported in holesSkippedAsFeature and left alone; pass
+   * fillFeatures to fill those too, once the user has been shown what they are.
+   */
+  fillHoles(maxEdges: number = 100, fillFeatures: boolean = false): FillHolesResult {
     if (!this.analyzer.isLoaded()) {
       throw new Error("No mesh loaded");
     }
-    return this.analyzer.fillHoles(maxEdges);
+    return this.analyzer.fillHolesEx(maxEdges, fillFeatures);
+  }
+
+  /** Measurements for every boundary loop, including why each was classified. */
+  describeHoles(): HoleInfo[] {
+    if (!this.analyzer.isLoaded()) {
+      throw new Error("No mesh loaded");
+    }
+    try {
+      return JSON.parse(this.analyzer.describeHoles()) as HoleInfo[];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Faces removed at load for carrying a NaN or infinite coordinate. */
+  nonFiniteFacesRemoved(): number {
+    return this.analyzer.nonFiniteFacesRemoved();
   }
 
   splitVertices(): SplitVerticesResult {
@@ -287,6 +311,7 @@ export class MeshFix {
       verticesAfter: raw.verticesAfter,
       facesBefore: raw.facesBefore,
       facesAfter: raw.facesAfter,
+      facesDropped: raw.facesDropped,
       reachedTarget: raw.verticesAfter <= targetVertices,
     };
   }

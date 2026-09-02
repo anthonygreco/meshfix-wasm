@@ -45,13 +45,34 @@ static void tfread(FILE* fp, T& t) {
     [[maybe_unused]] auto n = fread(&t, 1, sizeof(t), fp);
 }
 
-static int read_stl_robust(pmp::SurfaceMesh& mesh, const std::string& filepath) {
+// A coordinate that is NaN or infinite has to be rejected before it reaches
+// vertex_map below. CompareVec3 orders with `<`, and every comparison against
+// NaN is false, so a NaN key compares equivalent to whatever it meets on the
+// way down the tree: std::map's ordering requirement is violated, the lookup
+// for an unrelated position can terminate on the NaN node, and vertices that
+// share no coordinates get welded together. Observed effect on a sphere with
+// NaN on one triangle in 23: the whole model collapsed to a single vertex and
+// zero faces, reported as a successful load.
+//
+// Non-finite coordinates also survive repair and export intact, giving the
+// downloaded file an infinite bounding box that slicers reject as larger than
+// the build volume.
+static inline bool is_finite_point(const pmp::vec3& p) {
+    return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
+}
+
+// `nonFinite` receives the number of triangles dropped for having a NaN or
+// infinite coordinate. The return value remains the non-manifold skip count.
+static int read_stl_robust(pmp::SurfaceMesh& mesh, const std::string& filepath,
+                           int& nonFinite) {
     std::array<char, 100> line;
     uint32_t i, nT(0);
     pmp::vec3 p;
     pmp::Vertex v;
     std::vector<pmp::Vertex> vertices(3);
+    std::array<pmp::vec3, 3> corners;
     int skipped = 0;
+    nonFinite = 0;
 
     CompareVec3 comp;
     std::map<pmp::vec3, pmp::Vertex, CompareVec3> vertex_map(comp);
@@ -113,11 +134,19 @@ static int read_stl_robust(pmp::SurfaceMesh& mesh, const std::string& filepath) 
 
         while (nT) {
             n_items = fread(line.data(), 1, 12, in); // skip normal
+            bool finite = true;
             for (i = 0; i < 3; ++i) {
-                tfread(in, p);
-                vertices[i] = add_vertex(p);
+                tfread(in, corners[i]);
+                if (!is_finite_point(corners[i])) finite = false;
             }
-            try_add_face(vertices);
+            // Add nothing at all for a bad triangle: a non-finite position must
+            // never reach vertex_map.
+            if (finite) {
+                for (i = 0; i < 3; ++i) vertices[i] = add_vertex(corners[i]);
+                try_add_face(vertices);
+            } else {
+                ++nonFinite;
+            }
             n_items = fread(line.data(), 1, 2, in); // skip attribute
             --nT;
         }
@@ -126,14 +155,25 @@ static int read_stl_robust(pmp::SurfaceMesh& mesh, const std::string& filepath) 
         while (in && !feof(in) && fgets(line.data(), 100, in)) {
             for (c = line.data(); isspace(*c) && *c != '\0'; ++c) {}
             if ((strncmp(c, "outer", 5) == 0) || (strncmp(c, "OUTER", 5) == 0)) {
+                bool finite = true, complete = true;
                 for (i = 0; i < 3; ++i) {
                     c = fgets(line.data(), 100, in);
-                    if (!c) break;
+                    if (!c) { complete = false; break; }
                     for (c = line.data(); isspace(*c) && *c != '\0'; ++c) {}
+                    p = pmp::vec3(0, 0, 0);
+                    // sscanf leaves p untouched on a malformed line, and "nan"
+                    // and "inf" both parse cleanly with %f, so check the result
+                    // rather than trusting the text.
                     sscanf(c + 6, "%f %f %f", &p[0], &p[1], &p[2]);
-                    vertices[i] = add_vertex(p);
+                    corners[i] = p;
+                    if (!is_finite_point(p)) finite = false;
                 }
-                try_add_face(vertices);
+                if (complete && finite) {
+                    for (i = 0; i < 3; ++i) vertices[i] = add_vertex(corners[i]);
+                    try_add_face(vertices);
+                } else if (complete) {
+                    ++nonFinite;
+                }
             }
         }
     }
@@ -174,10 +214,19 @@ static int read_ply_robust(pmp::SurfaceMesh& mesh, const std::string& filepath, 
         std::vector<float> ys = plyIn.getElement("vertex").getProperty<float>("y");
         std::vector<float> zs = plyIn.getElement("vertex").getProperty<float>("z");
 
+        // A vertex with a non-finite coordinate gets no handle at all, so any
+        // face referring to it is dropped below rather than carried into the
+        // mesh. See is_finite_point().
         std::vector<pmp::Vertex> verts;
         verts.reserve(xs.size());
-        for (size_t i = 0; i < xs.size(); ++i) {
-            verts.push_back(mesh.add_vertex(pmp::Point(xs[i], ys[i], zs[i])));
+        const size_t nVerts = std::min({xs.size(), ys.size(), zs.size()});
+        for (size_t i = 0; i < nVerts; ++i) {
+            pmp::vec3 p(xs[i], ys[i], zs[i]);
+            if (!is_finite_point(p)) {
+                verts.push_back(pmp::Vertex());
+                continue;
+            }
+            verts.push_back(mesh.add_vertex(pmp::Point(p)));
         }
 
         // Read faces
@@ -186,11 +235,22 @@ static int read_ply_robust(pmp::SurfaceMesh& mesh, const std::string& filepath, 
             faces = plyIn.getElement("face").getListProperty<int>("vertex_indices");
         }
 
+        // A PLY may name a vertex index that does not exist; indexing `verts`
+        // with it would read off the end of the vector.
+        auto vertexAt = [&](int idx) -> pmp::Vertex {
+            if (idx < 0 || static_cast<size_t>(idx) >= verts.size()) return pmp::Vertex();
+            return verts[idx];
+        };
+
         for (auto& f : faces) {
             if (f.size() < 3) continue;
             // Triangulate if needed (fan triangulation)
             for (size_t i = 1; i + 1 < f.size(); ++i) {
-                std::vector<pmp::Vertex> tri = { verts[f[0]], verts[f[i]], verts[f[i+1]] };
+                std::vector<pmp::Vertex> tri = { vertexAt(f[0]), vertexAt(f[i]), vertexAt(f[i+1]) };
+                if (!tri[0].is_valid() || !tri[1].is_valid() || !tri[2].is_valid()) {
+                    ++skipped;
+                    continue;
+                }
                 if (tri[0] == tri[1] || tri[0] == tri[2] || tri[1] == tri[2]) continue;
                 try {
                     mesh.add_face(tri);
@@ -294,6 +354,10 @@ struct FillHolesResult {
     int holesFailed;
     int holesSkipped;
     int facesAdded;
+    // Loops left alone because they look like deliberate geometry rather than
+    // damage. Reported separately from holesSkipped (which is the edge-count
+    // cap) so the UI can offer to fill them anyway.
+    int holesSkippedAsFeature;
 };
 
 struct DecimateResult {
@@ -302,6 +366,9 @@ struct DecimateResult {
     int verticesAfter;
     int facesBefore;
     int facesAfter;
+    // Faces dropped by rebuildFromValidFaces() because decimation left them
+    // referencing vertices that no longer exist. Normally 0.
+    int facesDropped;
 };
 
 struct SplitVerticesResult {
@@ -370,11 +437,261 @@ struct MeshAnalysis {
     int isolatedVertexCount;
 };
 
+// --- Boundary-loop classification ---
+//
+// fillHoles() used to fill every boundary loop under the edge cap, which is a
+// size test, not an intent test. On a watertight solid that is harmless — a
+// designed bore is closed geometry there and never appears as a boundary loop.
+// On an open shell it is wrong: a designed bore IS a boundary loop, so bores,
+// slots and the part's own outer perimeter all got sealed. That is the
+// "it filled in the holes that were supposed to be there" report.
+//
+// The cost of guessing wrong runs both ways, and the two are not symmetric:
+// filling a bore spoils the part, but refusing to fill real damage means the
+// tool did not do its job. So this test is deliberately narrow — it only
+// declines loops that are large, flat and round, which is what a machined
+// opening looks like and what damage does not. Everything it declines is
+// counted in holesSkippedAsFeature so the caller can say so and offer to fill
+// it anyway; nothing is silently left behind.
+//
+// A missing triangle in a flat wall is flat and round too, which is why the
+// edge-count floor matters: damage is on the scale of the local triangles,
+// a designed opening is many triangles across.
+struct LoopShape {
+    int edges = 0;
+    double planarDeviation = 1.0;  // max distance from best-fit plane / diameter
+    double radiusVariation = 1.0;  // stddev/mean of in-plane radius
+    double edgeVariation = 1.0;    // stddev/mean of edge length
+    double diameter = 0.0;         // largest distance between any two loop vertices
+};
+
+static LoopShape measureLoop(const std::vector<pmp::Point>& p) {
+    LoopShape s;
+    s.edges = static_cast<int>(p.size());
+    if (p.size() < 3) return s;
+
+    pmp::Point c(0, 0, 0);
+    for (const auto& q : p) c += q;
+    c /= static_cast<pmp::Scalar>(p.size());
+
+    // Newell's method: robust plane normal for a polygon that is not perfectly
+    // planar, which no real boundary loop is.
+    pmp::Point n(0, 0, 0);
+    for (size_t i = 0; i < p.size(); ++i) {
+        const auto& a = p[i];
+        const auto& b = p[(i + 1) % p.size()];
+        n[0] += (a[1] - b[1]) * (a[2] + b[2]);
+        n[1] += (a[2] - b[2]) * (a[0] + b[0]);
+        n[2] += (a[0] - b[0]) * (a[1] + b[1]);
+    }
+    const double nlen = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (!(nlen > 0) || !std::isfinite(nlen)) return s;
+    n /= static_cast<pmp::Scalar>(nlen);
+
+    double diameter = 0;
+    for (size_t i = 0; i < p.size(); ++i)
+        for (size_t j = i + 1; j < p.size(); ++j)
+            diameter = std::max(diameter, static_cast<double>(pmp::distance(p[i], p[j])));
+    if (!(diameter > 0)) return s;
+
+    double maxDev = 0, rSum = 0, rSq = 0, eSum = 0, eSq = 0;
+    for (size_t i = 0; i < p.size(); ++i) {
+        const auto d = p[i] - c;
+        const double off = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
+        maxDev = std::max(maxDev, std::fabs(off));
+
+        const double dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        const double r = std::sqrt(std::max(0.0, dist2 - off * off));
+        rSum += r; rSq += r * r;
+
+        const double e = pmp::distance(p[i], p[(i + 1) % p.size()]);
+        eSum += e; eSq += e * e;
+    }
+    const double count = static_cast<double>(p.size());
+    const double rMean = rSum / count;
+    const double eMean = eSum / count;
+
+    s.diameter = diameter;
+    s.planarDeviation = maxDev / diameter;
+    if (rMean > 0) s.radiusVariation = std::sqrt(std::max(0.0, rSq / count - rMean * rMean)) / rMean;
+    if (eMean > 0) s.edgeVariation = std::sqrt(std::max(0.0, eSq / count - eMean * eMean)) / eMean;
+    return s;
+}
+
+// Thresholds are deliberately lopsided. The tool's job is repair, so leaving
+// real damage unfilled is a worse failure than filling a feature — and filling
+// every loop is exactly what this code did before the test existed, so any loop
+// it declines is ground gained and any loop it fills is merely the status quo.
+// A loop therefore has to be unmistakably a machined opening (large, flat,
+// round, with margin) before it is left alone.
+//
+// edgeVariation is measured and reported but deliberately NOT used here. Where
+// holes were made by deleting triangles from a regular grid, damage has
+// perfectly uniform boundary edges and designed openings have ragged ones — the
+// reverse of a CAD export, where the mesher lays an even ring of vertices around
+// a bore. The signal changes sign with how the mesh was produced, so it cannot
+// carry a decision.
+//
+// The case no geometry settles: a square torn patch and a square designed
+// opening in a flat wall are the same shape. Those get filled, which is the
+// safe direction; holesSkippedAsFeature and describeHoles() let the caller show
+// what was kept and offer to fill it anyway.
+// `meshDiagonal` is the bounding-box diagonal of the whole model; pass 0 to
+// skip the outer-boundary test.
+static bool looksDeliberate(const LoopShape& s, double meshDiagonal, int /*loopCount*/) {
+    // An open shell — a plate, a scanned surface, anything not closed — has its
+    // own outer edge as a boundary loop, and sealing that is never a repair: it
+    // turns a plate into a pillow. A loop spanning most of the model is that
+    // outer edge rather than damage; damage sits well inside the part, the
+    // widest tear in the corpus spanning 47% of the diagonal against 100% for a
+    // perimeter.
+    //
+    // This deliberately does not require a second loop to be present. An
+    // undamaged open shell has exactly one boundary loop — its perimeter — and
+    // that is the case that must not be sealed. The cost is that a single tear
+    // spanning more than 60% of the model is left alone, which is the right
+    // outcome anyway: a fan fill across that span produces nonsense, not a repair.
+    if (meshDiagonal > 0 && s.diameter >= 0.60 * meshDiagonal)
+        return true;
+
+    return s.edges >= 16              // damage spans a few triangles; an opening spans many
+        && s.planarDeviation <= 0.05  // a machined opening lies in a plane
+        && s.radiusVariation <= 0.08; // ... and is round, with margin to spare
+}
+
+// --- Connectivity integrity ---
+//
+// pmp::decimate() can return normally having left faces that reference vertices
+// its final garbage_collection() already removed. PMP catches that with
+// assert(idx < data_.size()) inside PropertyArray::operator[], but this module
+// ships -O2 with NDEBUG, so the assert is gone and the next traversal to read a
+// vertex position — face_area() in getAnalysis(), face_normal() in
+// writeRenderData(), the exporters — indexes past the end of the property
+// array. When the stale index lands outside linear memory that is a WASM trap,
+// which aborts the whole module: every later call on this instance fails and
+// the engine is dead until the page reloads.
+//
+// So: never hand a mesh to a traversal without checking it first. Both helpers
+// below bounds-check every handle before dereferencing it, and therefore stay
+// safe on exactly the meshes that are already corrupt.
+
+// True if every face's halfedge ring is walkable and lands only on live
+// vertices. `badFaces`, when given, collects the faces that fail.
+static bool connectivityIsValid(const pmp::SurfaceMesh& mesh,
+                                std::vector<pmp::Face>* badFaces = nullptr) {
+    const size_t nv = mesh.vertices_size();
+    const size_t nh = mesh.halfedges_size();
+    const size_t nf = mesh.faces_size();
+    bool ok = true;
+
+    for (auto f : mesh.faces()) {
+        bool faceOk = true;
+        if (static_cast<size_t>(f.idx()) >= nf) {
+            faceOk = false;
+        } else {
+            auto h0 = mesh.halfedge(f);
+            auto h = h0;
+            int guard = 0;
+            if (!h0.is_valid() || static_cast<size_t>(h0.idx()) >= nh) {
+                faceOk = false;
+            } else {
+                do {
+                    if (!h.is_valid() || static_cast<size_t>(h.idx()) >= nh) { faceOk = false; break; }
+                    auto v = mesh.to_vertex(h);
+                    if (!v.is_valid() || static_cast<size_t>(v.idx()) >= nv) { faceOk = false; break; }
+                    if (mesh.is_deleted(v)) { faceOk = false; break; }
+                    h = mesh.next_halfedge(h);
+                    // A ring that will not close is corrupt however long we walk.
+                    if (++guard > 100000) { faceOk = false; break; }
+                } while (h != h0);
+            }
+        }
+        if (!faceOk) {
+            ok = false;
+            if (!badFaces) return false;
+            badFaces->push_back(f);
+        }
+    }
+    return ok;
+}
+
+// Rebuild `mesh` from the faces that survive connectivityIsValid(), dropping
+// the rest. Returns the number of faces dropped, or -1 if the result is still
+// not valid (in which case `mesh` is left untouched and the caller must give
+// up on it).
+//
+// Called only after decimation, so the mesh has already been reduced to the
+// target size and the temporary copy is small relative to the original upload.
+static int rebuildFromValidFaces(pmp::SurfaceMesh& mesh) {
+    const size_t nv = mesh.vertices_size();
+    const size_t nh = mesh.halfedges_size();
+
+    pmp::SurfaceMesh rebuilt;
+    std::vector<pmp::Vertex> remap(nv, pmp::Vertex());
+    int dropped = 0;
+
+    for (auto f : mesh.faces()) {
+        // Collect the ring with the same bounds checks used above; anything
+        // that fails them is dropped rather than dereferenced.
+        std::vector<pmp::Vertex> ring;
+        bool faceOk = true;
+        auto h0 = mesh.halfedge(f);
+        auto h = h0;
+        int guard = 0;
+        if (!h0.is_valid() || static_cast<size_t>(h0.idx()) >= nh) {
+            faceOk = false;
+        } else {
+            do {
+                if (!h.is_valid() || static_cast<size_t>(h.idx()) >= nh) { faceOk = false; break; }
+                auto v = mesh.to_vertex(h);
+                if (!v.is_valid() || static_cast<size_t>(v.idx()) >= nv || mesh.is_deleted(v)) {
+                    faceOk = false;
+                    break;
+                }
+                ring.push_back(v);
+                h = mesh.next_halfedge(h);
+                if (++guard > 100000) { faceOk = false; break; }
+            } while (h != h0);
+        }
+
+        if (!faceOk || ring.size() < 3) { ++dropped; continue; }
+
+        std::vector<pmp::Vertex> tri;
+        tri.reserve(ring.size());
+        for (auto v : ring) {
+            if (!remap[v.idx()].is_valid()) {
+                remap[v.idx()] = rebuilt.add_vertex(mesh.position(v));
+            }
+            tri.push_back(remap[v.idx()]);
+        }
+
+        bool degenerate = false;
+        for (size_t i = 0; i < tri.size() && !degenerate; ++i)
+            for (size_t j = i + 1; j < tri.size(); ++j)
+                if (tri[i] == tri[j]) { degenerate = true; break; }
+        if (degenerate) { ++dropped; continue; }
+
+        try {
+            rebuilt.add_face(tri);
+        } catch (...) {
+            ++dropped;
+        }
+    }
+
+    if (!connectivityIsValid(rebuilt)) return -1;
+
+    mesh = std::move(rebuilt);
+    return dropped;
+}
+
 class MeshAnalyzer {
 public:
     MeshAnalyzer() : loaded_(false), skippedFaces_(0), colorsDropped_(false) {}
 
     bool colorsDropped() const { return colorsDropped_; }
+
+    // Faces removed at load for carrying a NaN or infinite coordinate.
+    int nonFiniteFacesRemoved() const { return nonFiniteFaces_; }
 
     bool loadFromFile(const std::string& path) {
         try {
@@ -388,9 +705,11 @@ public:
             std::string ext = (dot != std::string::npos) ? path.substr(dot) : "";
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
+            nonFiniteFaces_ = 0;
+
             if (ext == ".stl") {
                 // Use our fault-tolerant STL reader
-                skippedFaces_ = read_stl_robust(mesh_, path);
+                skippedFaces_ = read_stl_robust(mesh_, path, nonFiniteFaces_);
                 if (skippedFaces_ > 0) {
                     lastError_ = std::to_string(skippedFaces_) +
                         " non-manifold face(s) skipped during import";
@@ -405,11 +724,22 @@ public:
             } else {
                 // Use PMP's reader for other formats (OBJ, OFF, etc.)
                 pmp::read(mesh_, path);
+                // PMP's readers do no finite check, so sweep afterwards. The
+                // STL and PLY readers reject bad vertices at source instead,
+                // which is what keeps NaN out of the STL weld map.
+                nonFiniteFaces_ = dropNonFiniteVertices();
             }
 
-            loaded_ = mesh_.n_vertices() > 0;
+            loaded_ = mesh_.n_faces() > 0;
             if (!loaded_) {
-                lastError_ = "File read produced empty mesh";
+                lastError_ = nonFiniteFaces_ > 0
+                    ? "Every face in this file had an invalid (NaN or infinite) coordinate"
+                    : "File read produced empty mesh";
+                return false;
+            }
+            if (nonFiniteFaces_ > 0) {
+                lastError_ = std::to_string(nonFiniteFaces_) +
+                    " face(s) with invalid (NaN or infinite) coordinates removed during import";
             }
             return loaded_;
         } catch (const std::exception& e) {
@@ -427,6 +757,7 @@ public:
         try {
             mesh_ = pmp::SurfaceMesh();
             skippedFaces_ = 0;
+            nonFiniteFaces_ = 0;
             lastError_.clear();
             if (name == "icosphere" || name.rfind("icosphere", 0) == 0) {
                 // "icosphere" = level 3; "icosphere5"/"icosphere6"/"icosphere7" for high-poly
@@ -986,7 +1317,41 @@ public:
         return result;
     }
 
-    FillHolesResult fillHoles(int maxEdges) {
+    // Per-loop measurements as JSON, so a caller can show the user what is
+    // about to be filled and what is about to be left alone, and so the
+    // thresholds in looksDeliberate() can be set against measurements rather
+    // than intuition. Shape mirrors LoopShape.
+    std::string describeHoles() {
+        if (!loaded_) return "[]";
+        std::string out = "[";
+        bool first = true;
+        try {
+            auto loops = collectBoundaryLoops();
+            const double diag = meshDiagonal();
+            const int loopCount = static_cast<int>(loops.size());
+            for (auto& loopPoints : loops) {
+                if (loopPoints.size() < 3) continue;
+                const LoopShape s = measureLoop(loopPoints);
+                if (!first) out += ",";
+                first = false;
+                out += "{\"edges\":" + std::to_string(s.edges) +
+                       ",\"diameter\":" + std::to_string(s.diameter) +
+                       ",\"planarDeviation\":" + std::to_string(s.planarDeviation) +
+                       ",\"radiusVariation\":" + std::to_string(s.radiusVariation) +
+                       ",\"edgeVariation\":" + std::to_string(s.edgeVariation) +
+                       ",\"looksDeliberate\":" + (looksDeliberate(s, diag, loopCount) ? "true" : "false") + "}";
+            }
+        } catch (...) {
+            return "[]";
+        }
+        return out + "]";
+    }
+
+    FillHolesResult fillHoles(int maxEdges) { return fillHolesEx(maxEdges, false); }
+
+    // fillFeatures=true overrides the deliberate-geometry test, for a caller
+    // that has shown the user what was left behind and been told to fill it.
+    FillHolesResult fillHolesEx(int maxEdges, bool fillFeatures) {
         FillHolesResult result{};
         if (!loaded_) return result;
 
@@ -1029,6 +1394,11 @@ public:
             mesh_.remove_halfedge_property(visited);
 
             result.holesFound = static_cast<int>(loops.size());
+
+            // Measured once against the mesh as loaded: filling changes the
+            // loop count, and every loop must be judged against the same scale.
+            const double meshDiag = meshDiagonal();
+            const int loopCount = static_cast<int>(loops.size());
 
             // Fill each loop
             for (auto& loop : loops) {
@@ -1080,6 +1450,18 @@ public:
                 if (loopVerts.size() < 3) {
                     ++result.holesFailed;
                     continue;
+                }
+
+                // Leave deliberate geometry alone unless told otherwise. See
+                // looksDeliberate() for why the test is one-sided.
+                if (!fillFeatures) {
+                    std::vector<pmp::Point> loopPoints;
+                    loopPoints.reserve(loopVerts.size());
+                    for (auto lv : loopVerts) loopPoints.push_back(mesh_.position(lv));
+                    if (looksDeliberate(measureLoop(loopPoints), meshDiag, loopCount)) {
+                        ++result.holesSkippedAsFeature;
+                        continue;
+                    }
                 }
 
                 // Simple fan triangulation from first vertex.
@@ -1344,7 +1726,7 @@ public:
 
     DecimateResult decimate(int targetVertices, double aspectRatio,
                             double normalDeviation, double hausdorffError) {
-        DecimateResult result{false, 0, 0, 0, 0};
+        DecimateResult result{false, 0, 0, 0, 0, 0};
         if (!loaded_) {
             lastError_ = "No mesh loaded";
             return result;
@@ -1376,6 +1758,25 @@ public:
                           /*max_valence=*/0,
                           static_cast<pmp::Scalar>(normalDeviation),
                           static_cast<pmp::Scalar>(hausdorffError));
+
+            // pmp::decimate() returns normally on meshes it has corrupted, so
+            // its return is not evidence the mesh is usable. Check before any
+            // caller traverses it — getAnalysis(), writeRenderData() and the
+            // exporters all read vertex positions and would trap.
+            if (!connectivityIsValid(mesh_)) {
+                int dropped = rebuildFromValidFaces(mesh_);
+                if (dropped < 0) {
+                    // Unsalvageable. Drop the mesh rather than leave a live
+                    // handle to something that traps on the next traversal.
+                    mesh_ = pmp::SurfaceMesh();
+                    loaded_ = false;
+                    lastError_ =
+                        "Simplification produced an invalid mesh and it could not be recovered. "
+                        "Please load the file again and try a less aggressive amount.";
+                    return result;
+                }
+                result.facesDropped = dropped;
+            }
 
             result.verticesAfter = static_cast<int>(mesh_.n_vertices());
             result.facesAfter = static_cast<int>(mesh_.n_faces());
@@ -1654,6 +2055,72 @@ private:
     std::string lastError_;
     int skippedFaces_;
     bool colorsDropped_;
+    int nonFiniteFaces_ = 0;
+
+    // Bounding-box diagonal of the whole model — the scale a boundary loop is
+    // judged against in looksDeliberate().
+    double meshDiagonal() {
+        if (mesh_.n_vertices() == 0) return 0.0;
+        pmp::Point lo(std::numeric_limits<float>::max(),
+                      std::numeric_limits<float>::max(),
+                      std::numeric_limits<float>::max());
+        pmp::Point hi(std::numeric_limits<float>::lowest(),
+                      std::numeric_limits<float>::lowest(),
+                      std::numeric_limits<float>::lowest());
+        for (auto v : mesh_.vertices()) {
+            const auto& p = mesh_.position(v);
+            for (int i = 0; i < 3; ++i) {
+                lo[i] = std::min(lo[i], p[i]);
+                hi[i] = std::max(hi[i], p[i]);
+            }
+        }
+        const double dx = hi[0] - lo[0], dy = hi[1] - lo[1], dz = hi[2] - lo[2];
+        const double d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        return std::isfinite(d) ? d : 0.0;
+    }
+
+    // Walk every boundary loop once, returning each as its list of positions.
+    // Bounded by the halfedge count so a corrupt ring cannot spin forever.
+    std::vector<std::vector<pmp::Point>> collectBoundaryLoops() {
+        std::vector<std::vector<pmp::Point>> loops;
+        const int maxHalfedges = static_cast<int>(mesh_.n_halfedges());
+        auto visited = mesh_.add_halfedge_property<bool>("h:describeVisited", false);
+        for (auto h : mesh_.halfedges()) {
+            if (!mesh_.is_boundary(h) || visited[h]) continue;
+            std::vector<pmp::Point> pts;
+            auto cur = h;
+            int guard = 0;
+            bool valid = true;
+            do {
+                visited[cur] = true;
+                pts.push_back(mesh_.position(mesh_.to_vertex(cur)));
+                if (++guard > maxHalfedges) { valid = false; break; }
+                cur = mesh_.next_halfedge(cur);
+            } while (cur != h);
+            if (valid) loops.push_back(std::move(pts));
+        }
+        mesh_.remove_halfedge_property(visited);
+        return loops;
+    }
+
+    // Remove every vertex with a NaN or infinite position, and with it every
+    // face that used one. Used for the formats PMP reads directly (OBJ, OFF);
+    // the STL and PLY readers reject bad vertices before they are ever added.
+    // Returns the number of faces removed.
+    int dropNonFiniteVertices() {
+        std::vector<pmp::Vertex> bad;
+        for (auto v : mesh_.vertices()) {
+            if (!is_finite_point(mesh_.position(v))) bad.push_back(v);
+        }
+        if (bad.empty()) return 0;
+
+        int facesBefore = static_cast<int>(mesh_.n_faces());
+        for (auto v : bad) {
+            if (!mesh_.is_deleted(v)) mesh_.delete_vertex(v);
+        }
+        mesh_.garbage_collection();
+        return facesBefore - static_cast<int>(mesh_.n_faces());
+    }
 };
 
 EMSCRIPTEN_BINDINGS(meshfix_core) {
@@ -1691,7 +2158,8 @@ EMSCRIPTEN_BINDINGS(meshfix_core) {
         .field("verticesBefore", &DecimateResult::verticesBefore)
         .field("verticesAfter", &DecimateResult::verticesAfter)
         .field("facesBefore", &DecimateResult::facesBefore)
-        .field("facesAfter", &DecimateResult::facesAfter);
+        .field("facesAfter", &DecimateResult::facesAfter)
+        .field("facesDropped", &DecimateResult::facesDropped);
 
     value_object<RemoveDegeneratesResult>("RemoveDegeneratesResult")
         .field("facesBefore", &RemoveDegeneratesResult::facesBefore)
@@ -1712,7 +2180,8 @@ EMSCRIPTEN_BINDINGS(meshfix_core) {
         .field("holesFilled", &FillHolesResult::holesFilled)
         .field("holesFailed", &FillHolesResult::holesFailed)
         .field("holesSkipped", &FillHolesResult::holesSkipped)
-        .field("facesAdded", &FillHolesResult::facesAdded);
+        .field("facesAdded", &FillHolesResult::facesAdded)
+        .field("holesSkippedAsFeature", &FillHolesResult::holesSkippedAsFeature);
 
     value_object<SplitVerticesResult>("SplitVerticesResult")
         .field("verticesBefore", &SplitVerticesResult::verticesBefore)
@@ -1776,6 +2245,8 @@ EMSCRIPTEN_BINDINGS(meshfix_core) {
         .function("removeDegenerates", &MeshAnalyzer::removeDegenerates)
         .function("fixNormals", &MeshAnalyzer::fixNormals)
         .function("fillHoles", &MeshAnalyzer::fillHoles)
+        .function("fillHolesEx", &MeshAnalyzer::fillHolesEx)
+        .function("describeHoles", &MeshAnalyzer::describeHoles)
         .function("splitVertices", &MeshAnalyzer::splitVertices)
         .function("repair", &MeshAnalyzer::repair)
         .function("getVertexCount", &MeshAnalyzer::getVertexCount)
@@ -1786,5 +2257,6 @@ EMSCRIPTEN_BINDINGS(meshfix_core) {
         .function("scale", &MeshAnalyzer::scale)
         .function("decimate", &MeshAnalyzer::decimate)
         .function("colorsDropped", &MeshAnalyzer::colorsDropped)
+        .function("nonFiniteFacesRemoved", &MeshAnalyzer::nonFiniteFacesRemoved)
         .function("writeRenderData", &MeshAnalyzer::writeRenderData);
 }

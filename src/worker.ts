@@ -107,7 +107,13 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
     case "fillHoles": {
       if (!analyzer.isLoaded()) throw new Error("No mesh loaded");
       const maxEdges = (params.maxEdges as number) ?? 100;
-      return analyzer.fillHoles(maxEdges);
+      const fillFeatures = (params.fillFeatures as boolean) ?? false;
+      return analyzer.fillHoles(maxEdges, fillFeatures);
+    }
+
+    case "describeHoles": {
+      if (!analyzer.isLoaded()) throw new Error("No mesh loaded");
+      return analyzer.describeHoles();
     }
 
     case "splitVertices": {
@@ -202,6 +208,10 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
 
     case "colorsDropped": {
       return analyzer.colorsDropped();
+    }
+
+    case "nonFiniteFacesRemoved": {
+      return analyzer.nonFiniteFacesRemoved();
     }
 
     case "toRenderData": {

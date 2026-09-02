@@ -1,4 +1,5 @@
 import type {
+  HoleInfo,
   MeshStats,
   MeshAnalysis,
   WeldResult,
@@ -75,8 +76,13 @@ export class MeshFixWorker {
     return (await this.bridge.call("fixNormals")) as FixNormalsResult;
   }
 
-  async fillHoles(maxEdges?: number): Promise<FillHolesResult> {
-    return (await this.bridge.call("fillHoles", { maxEdges })) as FillHolesResult;
+  async fillHoles(maxEdges?: number, fillFeatures?: boolean): Promise<FillHolesResult> {
+    return (await this.bridge.call("fillHoles", { maxEdges, fillFeatures })) as FillHolesResult;
+  }
+
+  /** Measurements for every boundary loop, including why each was classified. */
+  async describeHoles(): Promise<HoleInfo[]> {
+    return (await this.bridge.call("describeHoles")) as HoleInfo[];
   }
 
   async splitVertices(): Promise<SplitVerticesResult> {
@@ -114,6 +120,11 @@ export class MeshFixWorker {
 
   async colorsDropped(): Promise<boolean> {
     return (await this.bridge.call("colorsDropped")) as boolean;
+  }
+
+  /** Faces removed at load for carrying a NaN or infinite coordinate. */
+  async nonFiniteFacesRemoved(): Promise<number> {
+    return (await this.bridge.call("nonFiniteFacesRemoved")) as number;
   }
 
   async toRenderData(): Promise<RenderData> {
