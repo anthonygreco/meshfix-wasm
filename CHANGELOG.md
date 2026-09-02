@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0
+## 0.5.0
 
 Three defects found from JustFixSTL user reports and GA4 telemetry.
 
