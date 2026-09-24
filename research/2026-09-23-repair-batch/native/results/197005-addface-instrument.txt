@@ -1,0 +1,5 @@
+CORRUPT at loop 246 (edges=39) tri 34/39 threw=0  | badness 0->1000 | face 143720 ring he 432417 belongs to face -1 | pre: v63337(val=34,bnd_out=1,isB=1,manifold=1) v65213(val=4,bnd_out=1,isB=1,manifold=1) v63337(val=34,bnd_out=1,isB=1,manifold=1) e01=new e12=bnd/face e20=new
+after fillHoles          faces=144253 he=433308 | badRing=1 badFaceRef=998 badPrevNext=1 badOpp=0 badBoundaryLoop=1 badVertexRot=0 badVHandle=0 badIdx=0 face 143720 ring halfedge 432417 has face 4294967295
+WATCHDOG: stuck in fixNormals
+
+[exited with code 0]

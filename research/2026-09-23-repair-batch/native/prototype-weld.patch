@@ -1,0 +1,20 @@
+--- native/core.inc	2026-09-23 22:48:24.351328432 +0000
++++ native/core-weld.inc	2026-09-23 22:51:08.541051957 +0000
+@@ -1007,6 +1007,9 @@
+                 positions[i] = mesh_.position(v);
+                 vertexMap[i] = i;
+             }
++            // PROTOTYPE: only vertices on an open edge may be merged.
++            std::vector<char> isB(V, 0);
++            for (auto v : mesh_.vertices()) isB[static_cast<int>(v.idx())] = mesh_.is_boundary(v) ? 1 : 0;
+ 
+             // Spatial hash grid
+             float invEps = 1.0f / epsilon;
+@@ -1043,6 +1046,7 @@
+                             for (int j : it->second) {
+                                 if (j <= i) continue;
+                                 if (vertexMap[j] != j) continue;
++                                if (!(isB[i] && isB[j])) continue; // PROTOTYPE
+ 
+                                 auto diff = positions[j] - pi;
+                                 float dist2 = dot(diff, diff);

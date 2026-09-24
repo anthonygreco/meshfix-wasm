@@ -194,6 +194,20 @@ export class MeshFix {
     return this.analyzer.nonFiniteFacesRemoved();
   }
 
+  /**
+   * Times a repair operation left the half-edge structure invalid and the
+   * mesh was rebuilt from its valid faces, since the last load. Zero on every
+   * mesh the operations handle correctly; a non-zero value is worth reporting.
+   */
+  connectivityRebuilds(): number {
+    return this.analyzer.connectivityRebuilds();
+  }
+
+  /** Faces lost to those rebuilds. */
+  facesDroppedByAudit(): number {
+    return this.analyzer.facesDroppedByAudit();
+  }
+
   splitVertices(): SplitVerticesResult {
     if (!this.analyzer.isLoaded()) {
       throw new Error("No mesh loaded");
@@ -217,29 +231,29 @@ export class MeshFix {
       if (onProgress) onProgress({ step, stepIndex, totalSteps });
     };
 
+    // Order: weld → split → fill → removeDegenerates → fixNormals.
+    // removeDegenerates collapses or flips zero-area triangles rather than
+    // deleting them, so it is safe on a closed mesh and belongs after the
+    // fill, where it also stitches the seams the fill sealed with zero-area
+    // triangles. fixNormals goes last to orient newly closed components.
     progress("weld", 0);
     const weld = this.analyzer.weldVertices(weldEpsilon);
 
-    // Only remove degenerates if mesh is not watertight — removing
-    // faces from a closed surface tears holes that may not fill cleanly.
-    const midAnalysis = this.analyzer.getAnalysis();
-    progress("removeDegenerates", 1);
-    const removeDegenerates = midAnalysis.isWatertight
-      ? null
-      : this.analyzer.removeDegenerates(minArea);
-
-    progress("splitVertices", 2);
+    progress("splitVertices", 1);
     const splitVertices = this.analyzer.splitVertices();
 
-    progress("fillHoles", 3);
+    progress("fillHoles", 2);
     const fillHoles = this.analyzer.fillHoles(maxHoleEdges);
+
+    progress("removeDegenerates", 3);
+    const removeDegenerates = this.analyzer.removeDegenerates(minArea);
 
     progress("fixNormals", 4);
     const fixNormals = this.analyzer.fixNormals();
 
     return {
       weld,
-      removeDegenerates: removeDegenerates as RemoveDegeneratesResult,
+      removeDegenerates,
       splitVertices,
       fillHoles,
       fixNormals,

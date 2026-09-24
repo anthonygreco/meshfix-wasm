@@ -127,6 +127,19 @@ export class MeshFixWorker {
     return (await this.bridge.call("nonFiniteFacesRemoved")) as number;
   }
 
+  /**
+   * Times a repair operation left the half-edge structure invalid and the
+   * mesh was rebuilt from its valid faces, since the last load.
+   */
+  async connectivityRebuilds(): Promise<number> {
+    return (await this.bridge.call("connectivityRebuilds")) as number;
+  }
+
+  /** Faces lost to those rebuilds. */
+  async facesDroppedByAudit(): Promise<number> {
+    return (await this.bridge.call("facesDroppedByAudit")) as number;
+  }
+
   async toRenderData(): Promise<RenderData> {
     const result = (await this.bridge.call("toRenderData")) as { buffer: ArrayBuffer };
     const buf = result.buffer;

@@ -1,0 +1,13 @@
+--- native/core.inc	2026-09-23 22:48:24.351328432 +0000
++++ native/core-weldB.inc	2026-09-23 22:53:07.413685932 +0000
+@@ -990,6 +990,10 @@
+     WeldResult weldVertices(float epsilon) {
+         WeldResult result{};
+         if (!loaded_) return result;
++        { // PROTOTYPE B: a closed surface has no gap to close
++            bool open = false; for (auto e : mesh_.edges()) if (mesh_.is_boundary(e)) { open = true; break; }
++            if (!open) { result.verticesBefore = result.verticesAfter = (int)mesh_.n_vertices(); result.facesBefore = result.facesAfter = (int)mesh_.n_faces(); return result; }
++        }
+ 
+         try {
+             if (epsilon <= 0.0f) epsilon = 1e-6f;

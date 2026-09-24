@@ -76,6 +76,11 @@ export interface FillHolesResult {
    * user — describeHoles() explains each one — and offer fillHoles({ fillFeatures: true }).
    */
   holesSkippedAsFeature: number;
+  /**
+   * Lone triangles that were their own component — their only "hole" was
+   * themselves — removed instead of being sealed into a zero-thickness pillow.
+   */
+  flapsRemoved: number;
 }
 
 /** Per-boundary-loop measurements behind the holesSkippedAsFeature decision. */
@@ -89,6 +94,21 @@ export interface HoleInfo {
   radiusVariation: number;
   /** Coefficient of variation of edge length. Reported only — see looksDeliberate(). */
   edgeVariation: number;
+  /**
+   * How far the loop's own connected component reaches from the loop's plane,
+   * over diameter. ~0 for a plate or thin open shell, large for a solid that is
+   * merely missing this face. Only measured for loops spanning 60% or more of
+   * the model's diagonal; 0 otherwise.
+   */
+  shellDepth: number;
+  /**
+   * The volume the loop's component would enclose if this loop were capped,
+   * over (loop area x diameter): the mean thickness of the closed solid
+   * relative to its width. ~0 for a plate, since capping a plate encloses
+   * nothing. Only measured for loops spanning 60% or more of the model's
+   * diagonal; 0 otherwise.
+   */
+  shellThickness: number;
   looksDeliberate: boolean;
 }
 
@@ -134,7 +154,7 @@ export interface SplitVerticesResult {
 
 export interface RepairResult {
   weld: WeldResult;
-  removeDegenerates: RemoveDegeneratesResult | null;
+  removeDegenerates: RemoveDegeneratesResult;
   splitVertices: SplitVerticesResult;
   fixNormals: FixNormalsResult;
   fillHoles: FillHolesResult;
@@ -199,6 +219,8 @@ export interface MeshAnalyzerInstance {
   decimate(targetVertices: number, aspectRatio: number, normalDeviation: number, hausdorffError: number): { success: boolean; verticesBefore: number; verticesAfter: number; facesBefore: number; facesAfter: number; facesDropped: number };
   colorsDropped(): boolean;
   nonFiniteFacesRemoved(): number;
+  connectivityRebuilds(): number;
+  facesDroppedByAudit(): number;
   writeRenderData(path: string): boolean;
   getLastError(): string;
   delete(): void;

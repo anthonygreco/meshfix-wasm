@@ -132,23 +132,22 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
       const verticesBefore = analyzer.getVertexCount();
       const facesBefore = analyzer.getFaceCount();
 
+      // Order: weld → split → fill → removeDegenerates → fixNormals.
+      // removeDegenerates collapses or flips zero-area triangles rather than
+      // deleting them, so it is safe on a closed mesh and belongs after the
+      // fill, where it also stitches the seams the fill sealed with zero-area
+      // triangles. fixNormals goes last to orient newly closed components.
       postProgress(id, "weld", 0, totalSteps);
       const weld = analyzer.weldVertices(weldEpsilon);
 
-      // Only remove degenerates if mesh is not watertight — removing
-      // faces from a closed surface tears holes that may not fill cleanly.
-      var midAnalysis = analyzer.getAnalysis();
-      postProgress(id, "removeDegenerates", 1, totalSteps);
-      var removeDegenerates = null;
-      if (!midAnalysis.isWatertight) {
-        removeDegenerates = analyzer.removeDegenerates(minArea);
-      }
-
-      postProgress(id, "splitVertices", 2, totalSteps);
+      postProgress(id, "splitVertices", 1, totalSteps);
       const splitVertices = analyzer.splitVertices();
 
-      postProgress(id, "fillHoles", 3, totalSteps);
+      postProgress(id, "fillHoles", 2, totalSteps);
       const fillHoles = analyzer.fillHoles(maxHoleEdges);
+
+      postProgress(id, "removeDegenerates", 3, totalSteps);
+      const removeDegenerates = analyzer.removeDegenerates(minArea);
 
       postProgress(id, "fixNormals", 4, totalSteps);
       const fixNormals = analyzer.fixNormals();
@@ -212,6 +211,14 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
 
     case "nonFiniteFacesRemoved": {
       return analyzer.nonFiniteFacesRemoved();
+    }
+
+    case "connectivityRebuilds": {
+      return analyzer.connectivityRebuilds();
+    }
+
+    case "facesDroppedByAudit": {
+      return analyzer.facesDroppedByAudit();
     }
 
     case "toRenderData": {

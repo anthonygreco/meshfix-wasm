@@ -161,3 +161,111 @@ describe('fillHoles — deliberate geometry vs damage', () => {
     expect(r.holesSkipped).toBeGreaterThan(0);
   });
 });
+
+// --- added 2026-09-24: a solid missing one face is damage, however wide -----
+//
+// The outer-edge exemption above used span alone (loop diameter >= 60% of the
+// model diagonal), which is also the shape of a box or prism that has lost one
+// face — the commonest export failure the tool exists for. Four of sixty local
+// models regressed that way in 0.5.0. The exemption now also needs the loop's
+// component to lie within 0.10 x diameter of the loop's plane, which a plate
+// does and a solid does not. And the round-opening rule needs the opening to
+// be at least 2% of the model diagonal, so a finely tessellated pinprick at
+// the tip of a cone is no longer kept open.
+describe('fillHoles — solids missing a face, and pinpricks', () => {
+  let analyzer: any;
+
+  beforeEach(() => {
+    analyzer = new module.MeshAnalyzer();
+  });
+
+  afterEach(() => {
+    analyzer.delete();
+  });
+
+  function load(tris: number[][][]) {
+    module.FS.writeFile('/tmp/holes2.stl', binaryStl(tris));
+    expect(analyzer.loadFromFile('/tmp/holes2.stl')).toBe(true);
+  }
+
+  // A closed box of size sx, sy, sz, outward wound; `skipTop` drops the top.
+  function box(sx: number, sy: number, sz: number, skipTop: boolean) {
+    const p = (x: number, y: number, z: number) => [x * sx, y * sy, z * sz];
+    const q = (a: number[], b: number[], c: number[], d: number[]) => [[a, b, c], [a, c, d]];
+    const faces = [
+      ...q(p(0, 0, 0), p(0, 1, 0), p(1, 1, 0), p(1, 0, 0)),
+      ...(skipTop ? [] : q(p(0, 0, 1), p(1, 0, 1), p(1, 1, 1), p(0, 1, 1))),
+      ...q(p(0, 0, 0), p(1, 0, 0), p(1, 0, 1), p(0, 0, 1)),
+      ...q(p(1, 0, 0), p(1, 1, 0), p(1, 1, 1), p(1, 0, 1)),
+      ...q(p(1, 1, 0), p(0, 1, 0), p(0, 1, 1), p(1, 1, 1)),
+      ...q(p(0, 1, 0), p(0, 0, 0), p(0, 0, 1), p(0, 1, 1)),
+    ];
+    return faces;
+  }
+
+  it('fills the missing top of a flat pad, whose opening spans most of the model', () => {
+    // 100 x 60 x 8: the opening's diagonal is 97% of the model's. Depth 8/117 = 0.07
+    // of the loop diameter would pass as a shell by depth alone; but the solid's
+    // walls stand off the plane by the full 8 — it is the reach, not the ratio
+    // to the model, that matters, and 8/117 is measured against the diameter.
+    load(box(100, 60, 20, true));
+    const info = JSON.parse(analyzer.describeHoles());
+    expect(info.length).toBe(1);
+    expect(info[0].shellDepth).toBeGreaterThan(0.10);
+    expect(info[0].shellThickness).toBeGreaterThan(0.02);
+    const r = analyzer.fillHoles(100);
+    expect(r.holesFilled).toBe(1);
+    expect(r.holesSkippedAsFeature).toBe(0);
+    expect(analyzer.getAnalysis().isWatertight).toBe(true);
+  });
+
+  it('fills the missing long side of a bar: shallow reach, but it encloses the bar', () => {
+    load(box(10, 10, 100, false).filter((_, i) => i !== 6 && i !== 7)); // drop the x=1 side wall
+    const info = JSON.parse(analyzer.describeHoles());
+    expect(info.length).toBe(1);
+    expect(info[0].shellDepth).toBeLessThanOrEqual(0.10); // 10 over a loop ~100 wide
+    expect(info[0].shellThickness).toBeGreaterThan(0.02);  // the bar itself
+    const r = analyzer.fillHoles(100);
+    expect(r.holesFilled).toBe(1);
+    expect(analyzer.getAnalysis().isWatertight).toBe(true);
+  });
+
+  it('still leaves a flat plate alone: its perimeter lies in its own plane', () => {
+    load(plate(24, () => false));
+    const info = JSON.parse(analyzer.describeHoles());
+    expect(info.length).toBe(1);
+    expect(info[0].shellDepth).toBeLessThanOrEqual(0.10);
+    expect(info[0].shellThickness).toBeLessThanOrEqual(0.02);
+    const r = analyzer.fillHoles(1000);
+    expect(r.holesFilled).toBe(0);
+    expect(r.holesSkippedAsFeature).toBe(1);
+  });
+
+  it('fills the pinprick at the tip of a tapered shell but keeps its wide round base', () => {
+    // A cone frustum, 64 segments, open at both ends: bottom radius 5, top
+    // radius 0.05, height 10. The top is a 64-edge, perfectly round, planar
+    // loop 0.1 across — 0.9% of the model — and used to be kept as a feature.
+    const N = 64, rb = 5, rt = 0.05, h = 10;
+    const ring = (r: number, z: number) =>
+      Array.from({ length: N }, (_, i) => [r * Math.cos((2 * Math.PI * i) / N), r * Math.sin((2 * Math.PI * i) / N), z]);
+    const B = ring(rb, 0), T = ring(rt, h);
+    const tris: number[][][] = [];
+    for (let i = 0; i < N; i++) {
+      const j = (i + 1) % N;
+      tris.push([B[i], B[j], T[j]], [B[i], T[j], T[i]]);
+    }
+    load(tris);
+    const before = analyzer.getAnalysis();
+    expect(before.holeCount).toBe(2);
+    const info = JSON.parse(analyzer.describeHoles());
+    const tip = info.find((l: any) => l.diameter < 1);
+    const base = info.find((l: any) => l.diameter > 1);
+    expect(tip.looksDeliberate).toBe(false);
+    // The wide round base is what the round-opening rule exists to keep.
+    expect(base.looksDeliberate).toBe(true);
+    const r = analyzer.fillHoles(100);
+    expect(r.holesFilled).toBe(1);
+    expect(r.holesSkippedAsFeature).toBe(1);
+    expect(analyzer.getAnalysis().holeCount).toBe(1);
+  });
+});

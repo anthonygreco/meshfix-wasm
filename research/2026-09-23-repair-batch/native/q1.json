@@ -1,0 +1,1 @@
+{"dateRanges":[{"startDate":"2026-09-02","endDate":"2026-09-23"}],"dimensions":[{"name":"customEvent:error"},{"name":"deviceCategory"}],"metrics":[{"name":"eventCount"}],"dimensionFilter":{"filter":{"fieldName":"eventName","stringFilter":{"value":"repair_failed"}}},"limit":100}

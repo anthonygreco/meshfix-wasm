@@ -55,7 +55,7 @@ Tests run in the browser, not Node.js. Start the dev server with `npm run serve`
 
 **Worker communication**: `worker-bridge.ts` provides promise-based RPC over `postMessage`. `worker.ts` is a classic worker script (no import/export). `worker-client.ts` wraps the bridge in the `MeshFixWorker` class.
 
-**Repair pipeline order**: weld → removeDegenerates → splitVertices → fillHoles → fixNormals. Order matters: fixNormals must run after fillHoles to orient newly-closed components.
+**Repair pipeline order**: weld → splitVertices → fillHoles → removeDegenerates → fixNormals. Order matters: removeDegenerates collapses or flips zero-area triangles (never deletes), so it runs after fillHoles to stitch the zero-area triangles a slit seam is sealed with; fixNormals must run last to orient newly-closed components.
 
 ## Key Files
 
@@ -75,6 +75,10 @@ Tests run in the browser, not Node.js. Start the dev server with `npm run serve`
 - **Single C++ file**: All logic in `cpp/bindings.cpp` — Embind bindings, I/O, analysis, repairs, render data. No separate `.h/.cpp` modules.
 - **Flat C++ structs, not vectors**: Embind `register_vector` is clunky. C++ returns flat int fields (`nonManifoldVertexCount`, etc.); TypeScript's `buildIssues()` maps these to `MeshIssue[]`.
 - **Non-manifold edges don't exist in loaded meshes**: The fault-tolerant STL reader skips faces that would create them. Only non-manifold vertices (bowties) need splitting.
+- **PMP's `is_manifold(v)` misses hidden bowties**: it circles from `halfedge(v)` and never sees a second fan the rotation cannot reach. `nonManifoldVertexMask()` (global incoming-halfedge count vs. rotation count) is the test used by analysis, `splitVertices()` and the collapse guard. Such vertices are why a boundary loop can pass through one vertex twice and why `pmp::collapse()` beside one leaves stale handles.
+- **Every repair op audits the half-edge structure** (`auditConnectivity()`): `pmp::add_face()` accepts a repeated-vertex triangle and `delete_face()` on a non-manifold mesh leaves stale vertex handles, both without throwing; either hangs the next circulator or traps. The audit rebuilds from valid faces if it fails; `connectivityRebuilds()` should stay 0.
+- **Never `delete_face()` in place on a possibly non-manifold mesh**: rebuild from the kept faces instead (weld, split, fixNormals, duplicate removal all do). Degenerate triangles are collapsed, flipped or re-triangulated, not deleted, and never in a way that moves geometry.
+- **Wild test corpus**: Thingi10K (Hugging Face, per-file download) plus a native build of the pipeline with PMP asserts live — see `research/2026-09-23-repair-batch/`. The local 60-model corpus never reproduced the production hang; 217 wild files did in minutes.
 - **PMP v3.0.0 has no `connected_components()`**: Implemented via BFS with `face_property<int>`.
 - **Worker is stateful**: Holds persistent `analyzer` instance with sequential message processing. ArrayBuffers are transferred (zero-copy, detached after send).
 - **Test shapes**: Built-in shapes generated in C++ — `icosphere`, `torus`, `tetrahedron`, `bowtie` (two open triangle fans sharing a vertex).
@@ -89,5 +93,5 @@ Tests run in the browser, not Node.js. Start the dev server with `npm run serve`
 - CMake flag is `PMP_BUILD_VIEWERS` (not `PMP_BUILD_VIS`)
 - PMP's `--no-heap-copy` flag removed (deprecated in Emscripten 5.x)
 - Root `package.json` has `"type": "module"` — browser works fine, Node.js ESM may conflict
-- PMP's `fill_hole()` replaced with simple fan triangulation (PMP's Delaunay refinement crashes in WASM on complex boundaries)
+- PMP's `fill_hole()` not used (its Delaunay refinement crashes in WASM on complex boundaries); loops are filled with a minimum-weight triangulation (`minWeightTriangulation()`, O(n³), n ≤ 200) after being split into simple sub-loops
 - WASM output: ~106KB JS + ~425KB WASM

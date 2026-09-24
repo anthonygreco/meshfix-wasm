@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+Repair pipeline overhaul, driven by the 2026-09-23 study in `research/2026-09-23-repair-batch/` (GA4, a 217-model Thingiverse sample, and a native build of the pipeline with PMP's asserts live).
+
+- **The 300s repair timeout is fixed.** `fillHoles()` handed `pmp::add_face()` a triangle with a repeated vertex whenever a boundary loop passed through the same vertex twice; PMP accepts that without throwing and links a face whose ring never closes, so the next face circulator — `fixNormals()`, `getAnalysis()`, PMP's own `add_face()` — spun forever. In production this was 285 of 2,936 repairs since Sep 2 (22–27% of repairs on meshes with 7+ issue categories), all desktop, none under 10k faces. Such loops are now split into simple sub-loops before filling, and no triangle with a repeated vertex ever reaches PMP. The vertices behind it — a second fan that PMP's vertex rotation never reaches, so `is_manifold()` calls the vertex manifold — are now found by a global test (`nonManifoldVertexMask()`), reported by the analysis, and split by `splitVertices()`, whose fans are clustered by face adjacency instead of by walking the rotation. Fixture: `__tests__/fixtures/pinched-boundary-loop.stl` (13 faces from Thingiverse 197005).
+- **"memory access out of bounds" traps are fixed.** `removeDegenerates()` deleted faces in place with `pmp::delete_face()`, which on a non-manifold mesh leaves halfedges pointing at vertices `garbage_collection()` then removes. It now rebuilds from the surviving faces, the path weld and split already used. Fixtures: `stale-vertex-handles.stl`, `stale-vertex-handles-2.stl` (8 and 9 faces from Thingiverse 815482 and 73177).
+- **Every repair operation audits the half-edge structure when it finishes** (`connectivityIsValid()`, now also checking halfedge links, vertex rotations and boundary chains) and rebuilds from the valid faces if it fails, so no later call can hang or trap. `connectivityRebuilds()` and `facesDroppedByAudit()` report whether that ever happened; on 277 test files it never does. The four unguarded traversal loops in the analysis and split have step caps.
+- **Weld is a no-op on a closed mesh.** It has no gap to close; merging two interior vertices within epsilon only pinches the surface, which `add_face()` refuses, tearing it open (organizer.stl: one merge, six faces lost, watertight → open).
+- **Holes are filled with a minimum-weight triangulation** (Barequet–Sharir, O(n³), loops up to 200 edges) instead of a fan. A fan failed whenever a chord from its apex was already an interior edge and produced a zero-area triangle whenever three boundary vertices were collinear. On the wild sample, open inputs closed by repair went from 25 to 108 of 136, and boundary loops left after repair from 3,019 to 86.
+- **Degenerate triangles are collapsed, flipped or re-triangulated, never deleted, and never in a way that moves geometry.** Deleting a zero-area face opened holes (one wild model went 23 → 113). A needle collapses its shortest edge; a cap flips its longest edge or has the face across it re-triangulated through the middle vertex (the T-junction stitch). `removeDegenerates()` now runs after the fill, on closed meshes too. Both halves of a duplicate "pillow" are dropped. Leftover zero-area triangles on the wild sample: 50,777 → 5,779 (they are cosmetic; on 5 of 217 files the count is higher than before because far more loops now get filled and some slit fills cannot be resolved without moving geometry).
+- **The hole classifier no longer refuses a solid missing one face.** The "outer edge of an open shell" exemption (loop ≥ 60% of the model diagonal) also matched a box or prism with an end cap dropped by a boolean, and left it open — four of sixty local models regressed this way in 0.5.0. The exemption now also requires the loop's component to lie within 0.10 × diameter of the loop's plane and to enclose a mean thickness under 0.02 × diameter when capped; measured shells sit at 0.01–0.08 and solids at 0.15–0.31. The round-opening rule needs the opening to be at least 2% of the model diagonal, so a finely tessellated pinprick at the tip of a cone is no longer kept open. `HoleInfo` gains `shellDepth` and `shellThickness`.
+- **`fixNormals()` no longer turns an internal cavity into a solid.** A closed shell nested inside another (ray-parity test, bounding-box prefiltered) keeps facing inward; dugout-bottom.stl kept its 3,024 mm³ void instead of gaining it as volume. Signed volumes are summed in double about a point on the component, so folded zero-volume sheets are no longer flipped back and forth on rounding noise; the analysis's `flippedNormalCount` uses the same test, so what it reports is what `fixNormals()` fixes.
+- **Lone flaps are dropped rather than sealed** into a zero-thickness pillow (`FillHolesResult.flapsRemoved`), and duplicate pillows lose both halves.
+- Repair pipeline order is now weld → splitVertices → fillHoles → removeDegenerates → fixNormals, and the watertight guard on `removeDegenerates` in `MeshFix.repair()` / `MeshFixWorker.repair()` is gone (it is safe on a closed mesh now). `RepairResult.removeDegenerates` is never `null`.
+- 22 new tests: `repair-integrity.test.ts`, and four in `hole-classification.test.ts`.
+
+Measured on the 217-model wild sample (native build): repairs ending worse than input 41 → 0, hangs 1 → 0, structural corruption 3 → 0 files, watertight inputs kept watertight 80/80 with their volumes unchanged, component count never up. On the 60-model local corpus through the site's exact path against 0.5.0: 21 files better, 32 unchanged, none lost watertightness or gained holes; the only counts that rose are zero-area triangles on connector.stl (16 → 22, now watertight) and organizer.stl (0 → 1, no longer torn open). The full test matrix — vitest, the ASan/UBSan native build over the local corpus, the connectivity audit after every step over every file — is in `research/2026-09-23-repair-batch/native/`.
+
+### API additions
+
+- `connectivityRebuilds(): number`, `facesDroppedByAudit(): number` on `MeshFix`, `MeshFixWorker` and the raw `MeshAnalyzer`
+- `FillHolesResult.flapsRemoved`
+- `HoleInfo.shellDepth`, `HoleInfo.shellThickness`
+
+### Behaviour changes
+
+- `removeDegenerates()` no longer deletes zero-area faces; `degenerateRemoved` counts triangles collapsed, flipped or re-triangulated away. A face none of those can handle is left as it was.
+- `weldVertices()` returns immediately on a mesh with no boundary edges.
+- `fillHoles()` fills loops it used to skip (solids missing a face, tiny openings) and refuses to seal a lone flap.
+- `fixNormals()` leaves nested inward-facing shells and zero-volume sheets alone.
+- `nonManifoldVertexCount` can be higher than before on the same mesh: it now includes vertices PMP's own test could not see.
+
 ## 0.5.0
 
 Three defects found from JustFixSTL user reports and GA4 telemetry.

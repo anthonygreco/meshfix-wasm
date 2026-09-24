@@ -1,0 +1,103 @@
+--- native/core.inc	2026-09-23 22:48:24.351328432 +0000
++++ native/core-C.inc	2026-09-23 23:06:29.988385899 +0000
+@@ -1,3 +1,4 @@
++#include <array>
+ #include <pmp/surface_mesh.h>
+ #include <pmp/io/io.h>
+ #include <pmp/algorithms/shapes.h>
+@@ -682,6 +683,40 @@
+     return dropped;
+ }
+ 
++// PROTOTYPE: minimum-weight triangulation of a boundary loop (Barequet-Sharir style DP).
++// Weight = triangle area + small chord-length term; near-zero-area triangles and chords that
++// already exist as interior edges get a large penalty so the DP routes around them.
++static std::vector<std::array<int,3>> minWeightTriangulation(const pmp::SurfaceMesh& mesh, const std::vector<pmp::Vertex>& lv) {
++    const int n = (int)lv.size();
++    std::vector<pmp::Point> P(n); for (int i = 0; i < n; ++i) P[i] = mesh.position(lv[i]);
++    double diam = 0, eSum = 0;
++    for (int i = 0; i < n; ++i) { eSum += pmp::distance(P[i], P[(i+1)%n]); for (int j = i+1; j < n; ++j) diam = std::max(diam, (double)pmp::distance(P[i], P[j])); }
++    const double eMean = eSum / n, degenArea = 1e-6 * diam * diam, BIG = 1e12;
++    auto chordBad = [&](int i, int j) {
++        if (j == i + 1 || (i == 0 && j == n - 1)) return false; // loop edge
++        auto h = mesh.find_halfedge(lv[i], lv[j]);
++        if (!h.is_valid()) return false;
++        return !(mesh.is_boundary(h) || mesh.is_boundary(mesh.opposite_halfedge(h)));
++    };
++    std::vector<std::vector<double>> W(n, std::vector<double>(n, 0.0));
++    std::vector<std::vector<int>> K(n, std::vector<int>(n, -1));
++    for (int len = 2; len < n; ++len) for (int i = 0; i + len < n; ++i) {
++        int j = i + len; double best = BIG * 1e3; int bk = -1;
++        for (int k = i + 1; k < j; ++k) {
++            const double area = 0.5 * pmp::norm(pmp::cross(P[k] - P[i], P[j] - P[i]));
++            double w = W[i][k] + W[k][j] + area + 0.05 * eMean * ((double)pmp::distance(P[i], P[j]));
++            if (area < degenArea) w += BIG;
++            if (chordBad(i, k) || chordBad(k, j) || chordBad(i, j)) w += BIG;
++            if (w < best) { best = w; bk = k; }
++        }
++        W[i][j] = best; K[i][j] = bk;
++    }
++    std::vector<std::array<int,3>> out;
++    std::vector<std::pair<int,int>> st{{0, n - 1}};
++    while (!st.empty()) { auto [i, j] = st.back(); st.pop_back(); if (j - i < 2) continue; int k = K[i][j]; out.push_back({i, k, j}); st.push_back({i, k}); st.push_back({k, j}); }
++    return out;
++}
++
+ class MeshAnalyzer {
+ public:
+     MeshAnalyzer() : loaded_(false), skippedFaces_(0), colorsDropped_(false) {}
+@@ -990,6 +1025,10 @@
+     WeldResult weldVertices(float epsilon) {
+         WeldResult result{};
+         if (!loaded_) return result;
++        { // PROTOTYPE B: a closed surface has no gap to close
++            bool open = false; for (auto e : mesh_.edges()) if (mesh_.is_boundary(e)) { open = true; break; }
++            if (!open) { result.verticesBefore = result.verticesAfter = (int)mesh_.n_vertices(); result.facesBefore = result.facesAfter = (int)mesh_.n_faces(); return result; }
++        }
+ 
+         try {
+             if (epsilon <= 0.0f) epsilon = 1e-6f;
+@@ -1468,9 +1507,9 @@
+                 // Fan fill is simpler, always safe, and good enough for repair.
+                 int facesAdded = 0;
+                 bool anyFailed = false;
+-                for (size_t i = 1; i + 1 < loopVerts.size(); ++i) {
++                for (auto& t : minWeightTriangulation(mesh_, loopVerts)) { // PROTOTYPE
+                     try {
+-                        std::vector<pmp::Vertex> tri = {loopVerts[0], loopVerts[i], loopVerts[i + 1]};
++                        std::vector<pmp::Vertex> tri = {loopVerts[t[0]], loopVerts[t[1]], loopVerts[t[2]]};
+                         mesh_.add_face(tri);
+                         ++facesAdded;
+                     } catch (...) {
+@@ -1626,6 +1665,31 @@
+         return result;
+     }
+ 
++    // PROTOTYPE: remove zero-area triangles by collapsing their shortest edge (stitches
++    // T-junctions and slit fills) — falls back to a flip of the longest edge, else leaves it.
++    int collapseDegenerates(float minArea) {
++        int collapsed = 0, flipped = 0, left = 0;
++        if (!loaded_) return 0;
++        for (int pass = 0; pass < 3; ++pass) {
++            int did = 0;
++            if (!mesh_.is_triangle_mesh()) break;
++            for (auto f : mesh_.faces()) {
++                if (mesh_.is_deleted(f)) continue;
++                if (pmp::face_area(mesh_, f) >= minArea) continue;
++                pmp::Halfedge shortest, longest; double smin = 1e300, smax = -1;
++                for (auto h : mesh_.halfedges(f)) { double l = pmp::distance(mesh_.position(mesh_.from_vertex(h)), mesh_.position(mesh_.to_vertex(h))); if (l < smin) { smin = l; shortest = h; } if (l > smax) { smax = l; longest = h; } }
++                if (shortest.is_valid() && mesh_.is_collapse_ok(shortest)) { mesh_.collapse(shortest); ++collapsed; ++did; continue; }
++                auto e = mesh_.edge(longest);
++                if (!mesh_.is_boundary(e) && mesh_.is_flip_ok(e)) { mesh_.flip(e); ++flipped; ++did; continue; }
++                ++left;
++            }
++            if (!did) break;
++        }
++        mesh_.garbage_collection();
++        fprintf(stderr, "collapseDegenerates: collapsed=%d flipped=%d left=%d\n", collapsed, flipped, left);
++        return collapsed + flipped;
++    }
++
+     RepairResult repair(float weldEpsilon, float minArea, int maxHoleEdges) {
+         RepairResult result{};
+         if (!loaded_) return result;

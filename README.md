@@ -67,10 +67,13 @@ const meshfix = await MeshFixWorker.init(options?);
 | `analyzeDetailed(buffer)` | `{ analysis, issues }` | Full topology analysis with issue detection |
 | `repair(options?, onProgress?)` | `RepairResult` | Auto-repair pipeline |
 | `weldVertices(epsilon?)` | `WeldResult` | Merge duplicate vertices |
-| `removeDegenerates(minArea?)` | `RemoveDegeneratesResult` | Remove zero-area and duplicate faces |
+| `removeDegenerates(minArea?)` | `RemoveDegeneratesResult` | Drop duplicate faces; collapse or flip zero-area triangles |
 | `splitVertices()` | `SplitVerticesResult` | Fix non-manifold (bowtie) vertices |
-| `fillHoles(maxEdges?)` | `FillHolesResult` | Fill boundary loops |
-| `fixNormals()` | `FixNormalsResult` | Orient normals outward |
+| `fillHoles(maxEdges?, fillFeatures?)` | `FillHolesResult` | Fill boundary loops (designed openings kept unless `fillFeatures`) |
+| `describeHoles()` | `HoleInfo[]` | Per-loop measurements behind the fill decision |
+| `fixNormals()` | `FixNormalsResult` | Orient inside-out components outward; cavities stay inward |
+| `connectivityRebuilds()` | `number` | Times a repair step had to rebuild an invalid mesh since load (expect 0) |
+| `facesDroppedByAudit()` | `number` | Faces lost to those rebuilds |
 | `reanalyze()` | `{ analysis, issues }` | Re-analyze after modifications |
 | `exportMesh(format?)` | `ArrayBuffer` | Export as `"stl"`, `"obj"`, or `"off"` |
 | `toRenderData()` | `RenderData` | Get vertex/index buffers for 3D rendering |
@@ -101,11 +104,13 @@ await meshfix.repair({
 
 The `repair()` method runs these steps in order:
 
-1. **Weld vertices** — merge duplicates within epsilon distance
-2. **Remove degenerates** — delete zero-area and duplicate faces (skipped if mesh is already watertight)
-3. **Split vertices** — fix non-manifold (bowtie) vertices
-4. **Fill holes** — close boundary loops with fan triangulation
-5. **Fix normals** — orient all faces outward using signed volume
+1. **Weld vertices** — merge duplicates within epsilon distance. A no-op on a closed mesh, which has no gap to close.
+2. **Split vertices** — fix non-manifold (bowtie) vertices, including ones PMP's own manifold test cannot see (a second fan the vertex rotation never reaches).
+3. **Fill holes** — close boundary loops with a minimum-weight triangulation. Loops that look like designed openings, or the perimeter of a genuine open shell, are left alone and counted in `holesSkippedAsFeature`; `describeHoles()` explains each, and `fillHoles(maxEdges, true)` fills them anyway.
+4. **Remove degenerates** — drop duplicate faces, and remove zero-area triangles by collapsing a needle's shortest edge or flipping a cap's longest edge (or re-triangulating the face across it), never by deleting the face and never by moving geometry. Runs after the fill so the zero-area triangles a slit seam is sealed with get stitched.
+5. **Fix normals** — orient inside-out closed components outward. An internal cavity (a closed shell nested inside another) keeps facing inward; folded zero-volume sheets are ignored.
+
+Every step audits the half-edge structure when it finishes and rebuilds the mesh from its valid faces if anything is broken; `connectivityRebuilds()` tells you if that ever happened (it should not).
 
 ### Decimation
 

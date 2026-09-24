@@ -1,0 +1,1 @@
+815482.stl after removeDegenerates  faces=137813 he=414026 | badRing=0 badFaceRef=0 badPrevNext=0 badOpp=0 badBoundaryLoop=0 badVertexRot=0 badVHandle=2 badIdx=0 

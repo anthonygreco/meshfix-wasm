@@ -1,0 +1,85 @@
+--- native/core-check.inc	2026-09-23 23:16:12.153038170 +0000
++++ native/core-check-R.inc	2026-09-23 23:30:28.218768917 +0000
+@@ -1130,63 +1130,31 @@
+     RemoveDegeneratesResult removeDegenerates(float minArea) {
+         RemoveDegeneratesResult result{};
+         if (!loaded_) return result;
+-
+         try {
+             result.facesBefore = static_cast<int>(mesh_.n_faces());
+-
+             if (minArea <= 0.0f) minArea = 1e-10f;
+-
+-            // Phase A: Remove duplicate faces
+-            int dupRemoved = 0;
+-            {
+-                std::set<std::vector<pmp::IndexType>> faceSet;
+-                for (auto f : mesh_.faces()) {
+-                    std::vector<pmp::IndexType> vids;
+-                    for (auto v : mesh_.vertices(f)) {
+-                        vids.push_back(v.idx());
+-                    }
+-                    std::sort(vids.begin(), vids.end());
+-                    auto ins = faceSet.insert(vids);
+-                    if (!ins.second) {
+-                        mesh_.delete_face(f);
+-                        ++dupRemoved;
+-                    }
+-                }
+-            }
+-            result.duplicateRemoved = dupRemoved;
+-
+-            // Phase B: Remove degenerate faces (near-zero area)
+-            int degenRemoved = 0;
++            // PROTOTYPE R: decide which faces to keep, then rebuild — no in-place delete_face.
++            std::set<std::vector<pmp::IndexType>> faceSet;
++            pmp::SurfaceMesh newMesh;
++            std::vector<pmp::Vertex> vmap(mesh_.n_vertices());
++            for (auto v : mesh_.vertices()) vmap[v.idx()] = newMesh.add_vertex(mesh_.position(v));
++            int dup = 0, degen = 0, skipped = 0;
+             for (auto f : mesh_.faces()) {
+-                if (pmp::face_area(mesh_, f) < minArea) {
+-                    mesh_.delete_face(f);
+-                    ++degenRemoved;
+-                }
++                std::vector<pmp::IndexType> vids; std::vector<pmp::Vertex> verts;
++                for (auto v : mesh_.vertices(f)) { vids.push_back(v.idx()); verts.push_back(vmap[v.idx()]); }
++                std::sort(vids.begin(), vids.end());
++                if (!faceSet.insert(vids).second) { ++dup; continue; }
++                if (pmp::face_area(mesh_, f) < minArea) { ++degen; continue; }
++                try { newMesh.add_face(verts); } catch (...) { ++skipped; }
+             }
+-            result.degenerateRemoved = degenRemoved;
+-
+-            // Phase C: Count isolated vertices before GC
+-            int isoCount = 0;
+-            for (auto v : mesh_.vertices()) {
+-                if (mesh_.is_isolated(v)) {
+-                    ++isoCount;
+-                }
+-            }
+-            result.isolatedVerticesRemoved = isoCount;
+-
+-            // Phase D: Compact the mesh
+-            mesh_.garbage_collection();
+-            skippedFaces_ = 0;
+-
+-            // Phase E: Populate result
++            int iso = 0; for (auto v : newMesh.vertices()) if (newMesh.is_isolated(v)) { newMesh.delete_vertex(v); ++iso; }
++            newMesh.garbage_collection();
++            mesh_ = std::move(newMesh);
++            skippedFaces_ = skipped;
++            result.duplicateRemoved = dup; result.degenerateRemoved = degen; result.isolatedVerticesRemoved = iso;
+             result.facesAfter = static_cast<int>(mesh_.n_faces());
+-
+-        } catch (const std::exception& e) {
+-            lastError_ = std::string("Error removing degenerates: ") + e.what();
+-        } catch (...) {
+-            lastError_ = "Unknown error removing degenerates";
+-        }
+-
++        } catch (const std::exception& e) { lastError_ = std::string("Error removing degenerates: ") + e.what(); }
++        catch (...) { lastError_ = "Unknown error removing degenerates"; }
+         return result;
+     }
+ 

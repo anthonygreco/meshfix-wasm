@@ -1,0 +1,2 @@
+197005.stl after fillHoles          faces=144253 he=433308 | badRing=1 badFaceRef=998 badPrevNext=1 badOpp=0 badBoundaryLoop=1 badVertexRot=0 badVHandle=0 badIdx=0 face 143720 ring halfedge 432417 has face 4294967295
+197005.stl WATCHDOG WATCHDOG: stuck in fixNormals
