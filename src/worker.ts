@@ -108,12 +108,16 @@ function handleMessage(method: string, params: Record<string, unknown>, buffer?:
       if (!analyzer.isLoaded()) throw new Error("No mesh loaded");
       const maxEdges = (params.maxEdges as number) ?? 100;
       const fillFeatures = (params.fillFeatures as boolean) ?? false;
-      return analyzer.fillHoles(maxEdges, fillFeatures);
+      return analyzer.fillHolesEx(maxEdges, fillFeatures);
     }
 
     case "describeHoles": {
       if (!analyzer.isLoaded()) throw new Error("No mesh loaded");
-      return analyzer.describeHoles();
+      try {
+        return JSON.parse(analyzer.describeHoles());
+      } catch {
+        return [];
+      }
     }
 
     case "splitVertices": {

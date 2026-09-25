@@ -13,7 +13,8 @@
     "./dist/*": "./dist/*"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "!dist/*.cjs"
   ],
   "scripts": {
     "install-emsdk": "bash scripts/install-emsdk.sh",

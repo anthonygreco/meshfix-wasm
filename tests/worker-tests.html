@@ -176,6 +176,47 @@
           pass("auto repair on bowtie: NM verts fixed, post-repair NM=0");
         } catch (e) { fail("auto repair bowtie", e); }
 
+        // --- Designed openings via worker (bore plate) ---
+        section("Designed Openings via Worker (bore plate)");
+
+        // 48x48 flat plate with a radius-4 bore: two loops, the bore and the
+        // plate's outer edge, both classified as designed openings.
+        function borePlate() {
+          const N = 48, tris = [];
+          const P = (i, j) => [(i / N) * 20 - 10, (j / N) * 20 - 10, 0];
+          for (let j = 0; j < N; j++)
+            for (let i = 0; i < N; i++) {
+              const a = P(i, j), b = P(i + 1, j), c = P(i + 1, j + 1), d = P(i, j + 1);
+              for (const t of [[a, b, c], [a, c, d]])
+                if (Math.hypot((t[0][0] + t[1][0] + t[2][0]) / 3, (t[0][1] + t[1][1] + t[2][1]) / 3) >= 4) tris.push(t);
+            }
+          const buf = new ArrayBuffer(84 + tris.length * 50);
+          const view = new DataView(buf);
+          view.setUint32(80, tris.length, true);
+          let o = 84;
+          for (const t of tris) {
+            o += 12;
+            for (const v of t) { view.setFloat32(o, v[0], true); view.setFloat32(o + 4, v[1], true); view.setFloat32(o + 8, v[2], true); o += 12; }
+            o += 2;
+          }
+          return buf;
+        }
+
+        try {
+          await worker.analyze(borePlate());
+          const r = await worker.fillHoles(1000, true);
+          assertEqual(r.holesFilled, 2, "holesFilled");
+          pass("fillHoles(1000, true) on bore plate: 2 of 2 filled");
+        } catch (e) { fail("fillHoles fillFeatures", e); }
+
+        try {
+          await worker.analyze(borePlate());
+          const holes = await worker.describeHoles();
+          assert(Array.isArray(holes), "describeHoles returns an array");
+          assertEqual(holes.length, 2, "loops described");
+          pass("describeHoles on bore plate: array of 2");
+        } catch (e) { fail("describeHoles", e); }
+
         // --- Export formats via worker ---
         section("Export Formats via Worker");
 

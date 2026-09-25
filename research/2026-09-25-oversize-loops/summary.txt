@@ -1,0 +1,27 @@
+
+## local: 61/62 files ran, 27 open after weld+split
+  files with a loop >100 edges: 3; such loops: 523 (holesSkipped total 523, per-file mismatches 0)
+  of those loops, looksDeliberate: 2 in 2 files
+  loops the site reports as unfixed holes after auto-repair: now 523 (3 files) -> classified 521 (3 files); files that would read "open by design" instead: 0
+    shower-piece.stl  over=5 deliberate=1 [{"e":236,"diaPct":89,"sd":0.058,"st":0.005,"rv":0.574}]
+    test.stl  over=5 deliberate=1 [{"e":236,"diaPct":89,"sd":0.058,"st":0.005,"rv":0.574}]
+
+## wild: 217/220 files ran, 133 open after weld+split
+  files with a loop >100 edges: 20; such loops: 51 (holesSkipped total 51, per-file mismatches 0)
+  of those loops, looksDeliberate: 12 in 7 files
+  loops the site reports as unfixed holes after auto-repair: now 61 (25 files) -> classified 49 (23 files); files that would read "open by design" instead: 2
+    222687.stl  over=1 deliberate=1 [{"e":160,"diaPct":55,"sd":0,"st":0,"rv":0.004}]
+    45122.stl  over=4 deliberate=3 [{"e":576,"diaPct":35,"sd":0,"st":0,"rv":0.05},{"e":576,"diaPct":35,"sd":0,"st":0,"rv":0.05},{"e":576,"diaPct":35,"sd":0,"st":0,"rv":0.05}]
+    66375.stl  over=2 deliberate=2 [{"e":128,"diaPct":6,"sd":0,"st":0,"rv":0.046},{"e":128,"diaPct":5,"sd":0,"st":0,"rv":0.041}]
+    85790.stl  over=6 deliberate=2 [{"e":128,"diaPct":18,"sd":0,"st":0,"rv":0},{"e":128,"diaPct":18,"sd":0,"st":0,"rv":0}]
+    92981.stl  over=2 deliberate=1 [{"e":179,"diaPct":17,"sd":0,"st":0,"rv":0.035}]
+    93957.stl  over=3 deliberate=2 [{"e":142,"diaPct":64,"sd":0,"st":0,"rv":0.527},{"e":218,"diaPct":67,"sd":0,"st":0,"rv":0.625}]
+    85537.stl  over=5 deliberate=1 [{"e":478,"diaPct":40,"sd":0,"st":0,"rv":0.054}]
+
+## held: 300/300 files ran, 55 open after weld+split
+  files with a loop >100 edges: 5; such loops: 7 (holesSkipped total 7, per-file mismatches 0)
+  of those loops, looksDeliberate: 4 in 3 files
+  loops the site reports as unfixed holes after auto-repair: now 7 (5 files) -> classified 3 (3 files); files that would read "open by design" instead: 2
+    346290.stl  over=2 deliberate=2 [{"e":214,"diaPct":87,"sd":0.031,"st":0.008,"rv":0.49},{"e":542,"diaPct":90,"sd":0.03,"st":0.009,"rv":0.423}]
+    46025.stl  over=1 deliberate=1 [{"e":800,"diaPct":68,"sd":0.494,"st":0.328,"rv":0.004}]
+    46024.stl  over=2 deliberate=1 [{"e":800,"diaPct":68,"sd":0.505,"st":0.327,"rv":0.004}]

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1
+
+- **`MeshFixWorker.fillHoles(maxEdges, true)` fills designed openings again.** The worker called the raw `fillHoles(int)` binding with two arguments; embind drops the second without complaint, so `fillFeatures` never reached the engine. It now calls `fillHolesEx()`, as `MeshFix` does. Bore plate (`hole-classification.test.ts`): 0 of 2 loops filled before, 2 of 2 now.
+- **`MeshFixWorker.describeHoles()` returns `HoleInfo[]`**, as typed, instead of the raw JSON string. Parsed in the worker, as `MeshFix.describeHoles()` does.
+- **`dist/meshfix-core.cjs` is no longer shipped.** It was a stale file from an older build, left in `dist/` and packed into 0.6.0; nothing builds it, and requiring it fails with `LinkError: Import #25 module=env function=invoke_viiid` against the shipped `.wasm`. Use `dist/meshfix-core.js` (CommonJS via `dist/package.json`). `package.json` `files` now excludes `dist/*.cjs`.
+- Tests through the worker: `__tests__/worker.test.ts` runs the real `MeshFixWorker`, bridge and `dist/worker.js` with only the thread faked (messages go through `structuredClone`), and `tests/worker-tests.html` has the same two checks in a real browser Worker. Both fail on the 0.6.0 worker.
+
+Unchanged, on measurement: `fillHoles()` still skips a loop over `maxEdges` (`holesSkipped`) before the designed-opening test, so an oversize designed loop is reported as an unfilled hole rather than in `holesSkippedAsFeature`. Neither kind is filled, so this is only the label. Classifying oversize loops too was measured over the site's auto-repair path (weld → split → fill at the default 100 edges) on the local corpus (61 files), the wild sample (217) and the held-out set (300): 581 loops over 100 edges in 28 files, 18 of them classified as deliberate, in 12 files; 4 files would change from "unfixed holes" to "open by design". Two of those four are 46025, which the classifier's own measurement puts on a solid (shell thickness 0.33, above the 0.15–0.31 measured for solids missing a face; it matches the round-opening rule, which has no solid check), and 66375, which is already cited in `looksDeliberate()` for round wire ends mistaken for bores. Relabelling would tell the user a damaged model is fine in half the cases it touches, so the order stays. Script and per-file results: `research/2026-09-25-oversize-loops/`.
+
 ## 0.6.0
 
 Repair pipeline overhaul, driven by the 2026-09-23 study in `research/2026-09-23-repair-batch/` (GA4, a 217-model Thingiverse sample, and a native build of the pipeline with PMP's asserts live).
