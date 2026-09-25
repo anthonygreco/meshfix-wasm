@@ -1,7 +1,7 @@
 // Batch driver: one child per model, the site's 300s per-engine-call limit,
 // 100 MB upload cap, formats the site accepts. Writes results.jsonl.
 import { spawn } from "node:child_process"; import { readdirSync, statSync, appendFileSync, writeFileSync } from "node:fs"; import { join, basename } from "node:path";
-const DIR = process.env.HOME + "/.vaxis-backups/models", S = new URL(".", import.meta.url).pathname;
+const DIR = process.env.DIR || process.env.HOME + "/.vaxis-backups/models", S = new URL(".", import.meta.url).pathname;
 const LIMIT = 300_000, CAP = 100 * 1024 * 1024, OK = ["stl", "obj", "off", "ply"], CONC = +process.env.CONC || 4;
 const out = join(S, process.env.OUT || "results.jsonl"); writeFileSync(out, "");
 const files = readdirSync(DIR).map(f => ({ f, size: statSync(join(DIR, f)).size })).sort((x, y) => x.size - y.size);

@@ -1,0 +1,3 @@
+996800.stl after removeDegenerates  faces=31635 he=98516 | badRing=0 badFaceRef=0 badPrevNext=0 badOpp=0 badBoundaryLoop=0 badVertexRot=0 badVHandle=6 badIdx=0 
+996800.stl after fillHoles          faces=33461 he=101290 | badRing=1 badFaceRef=998 badPrevNext=1 badOpp=0 badBoundaryLoop=1 badVertexRot=0 badVHandle=0 badIdx=0 face 32942 ring halfedge 100673 has face 4294967295
+996800.stl WATCHDOG: stuck in fixNormals

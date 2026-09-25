@@ -58,6 +58,33 @@ static void tfread(FILE* fp, T& t) {
 // Non-finite coordinates also survive repair and export intact, giving the
 // downloaded file an infinite bounding box that slicers reject as larger than
 // the build volume.
+// Area of a face, computed from edge vectors about its first vertex in
+// double. pmp::face_area() sums cross products of the absolute positions in
+// float, so for a small face far from the origin the true area is lost in the
+// rounding of terms the size of |p|²: on Thingiverse 815482 (coordinates
+// ~50, triangles ~0.003 wide) it returned exactly 0 for triangles whose area
+// is 3.5e-6, and a few times the true area for their neighbours. Every
+// "zero-area triangle" decision in this file goes through this instead.
+static double faceArea(const pmp::SurfaceMesh& mesh, pmp::Face f) {
+    auto h0 = mesh.halfedge(f);
+    if (!h0.is_valid()) return 0.0;
+    const pmp::Point a = mesh.position(mesh.from_vertex(h0));
+    const pmp::dvec3 p0(a[0], a[1], a[2]);  // subtract in double: float differences round
+    pmp::dvec3 sum(0.0, 0.0, 0.0);
+    pmp::dvec3 prev(0.0, 0.0, 0.0);
+    bool first = true;
+    int guard = 0;
+    for (auto h = h0; ; h = mesh.next_halfedge(h)) {
+        const pmp::Point q = mesh.position(mesh.to_vertex(h));
+        const pmp::dvec3 cur = pmp::dvec3(q[0], q[1], q[2]) - p0;
+        if (!first) sum += pmp::cross(prev, cur);
+        prev = cur;
+        first = false;
+        if (mesh.next_halfedge(h) == h0 || ++guard > 1000) break;
+    }
+    return 0.5 * pmp::norm(sum);
+}
+
 static inline bool is_finite_point(const pmp::vec3& p) {
     return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
 }
@@ -1290,7 +1317,7 @@ public:
             // (f) Degenerate triangles
             int degenCount = 0;
             for (auto f : mesh_.faces()) {
-                if (pmp::face_area(mesh_, f) < 1e-10f) {
+                if (faceArea(mesh_, f) < 1e-10) {
                     ++degenCount;
                 }
             }
@@ -1595,13 +1622,66 @@ public:
             // PMP circulator is asked about it.
             int degenRemoved = 0;
             const double tinyMove = 1e-4 * meshDiagonal();
+            // Positions are floats, so a triangle whose three vertices lie on
+            // one line comes out with an area of a few ulps as often as with
+            // exactly zero: on fan.stl the fill of an 81-vertex collinear
+            // slit had areas of 0, 2^-22, 2^-19 and 2^-17. Deciding "real"
+            // by area < minArea alone sent the middle vertex across into
+            // another zero-area triangle and back again for ever. A triangle
+            // counts as collinear here when the height of its apex above its
+            // longest side is under four ulps of the coordinates; only the
+            // exact ones (area < minArea) are what the analysis reports, and
+            // only those may be collapsed, so no vertex moves that did not
+            // move before.
+            const double hTol = 4.0 * 1.1920929e-7 * coordinateMagnitude();
+            auto collinearPts = [&](const pmp::Point& a, const pmp::Point& b, const pmp::Point& c) {
+                const pmp::dvec3 da(a[0], a[1], a[2]), db(b[0], b[1], b[2]), dc(c[0], c[1], c[2]);
+                const pmp::dvec3 ab = db - da, ac = dc - da, bc = dc - db;
+                const double area = 0.5 * pmp::norm(pmp::cross(ab, ac));
+                if (area < minArea) return true;
+                const double smax = std::max({pmp::norm(ab), pmp::norm(ac), pmp::norm(bc)});
+                return 2.0 * area < hTol * smax;
+            };
+            auto collinear = [&](pmp::Face f) {
+                pmp::Point p[3];
+                int n = 0;
+                for (auto v : mesh_.vertices(f)) { if (n < 3) p[n] = mesh_.position(v); ++n; }
+                if (n != 3) return faceArea(mesh_, f) < minArea;
+                return collinearPts(p[0], p[1], p[2]);
+            };
+            // Faces around v other than f1, f2, f3. pmp::delete_face() marks
+            // a vertex deleted when its last edge goes, but leaves its
+            // halfedge pointing at the dead edge, so a face added on it
+            // afterwards links into garbage. Nothing below may add a face on
+            // a vertex this returns 0 for once those faces are deleted.
+            auto facesAroundExcluding = [&](pmp::Vertex v, pmp::Face f1, pmp::Face f2, pmp::Face f3) {
+                if (!mesh_.halfedge(v).is_valid()) return 0;
+                int n = 0, guard = 0;
+                for (auto h : mesh_.halfedges(v)) {
+                    auto g = mesh_.face(h);
+                    if (g.is_valid() && g != f1 && g != f2 && g != f3) ++n;
+                    if (++guard > 100000) break;
+                }
+                return n;
+            };
             if (mesh_.is_triangle_mesh()) {
-                for (int pass = 0; pass < 3; ++pass) {
+                // A slit seam is a chain of collinear triangles and each fix
+                // eats one from an end (see resolveCap), so this needs as
+                // many passes as the longest chain. Every fix either removes
+                // a collinear triangle without making one, or shortens a
+                // chord, so the loop cannot cycle; the count not falling for
+                // two passes means the rest cannot be resolved.
+                const int maxPasses = 20;
+                size_t lastLeft = std::numeric_limits<size_t>::max();
+                int stalled = 0;
+                for (int pass = 0; pass < maxPasses; ++pass) {
                     std::vector<pmp::Face> degenerate;
                     for (auto f : mesh_.faces()) {
-                        if (pmp::face_area(mesh_, f) < minArea) degenerate.push_back(f);
+                        if (collinear(f)) degenerate.push_back(f);
                     }
                     if (degenerate.empty()) break;
+                    if (degenerate.size() >= lastLeft) { if (++stalled >= 2) break; } else stalled = 0;
+                    lastLeft = degenerate.size();
 
                     // Vertices PMP's collapse and flip are not safe beside:
                     // see nonManifoldVertexMask(). Recomputed each pass since
@@ -1611,7 +1691,8 @@ public:
                     int fixedThisPass = 0;
                     for (auto f : degenerate) {
                         if (mesh_.is_deleted(f)) continue;
-                        if (pmp::face_area(mesh_, f) >= minArea) continue;
+                        if (!collinear(f)) continue;
+                        const bool exact = faceArea(mesh_, f) < minArea;
 
                         bool safe = true;
                         for (auto v : mesh_.vertices(f)) {
@@ -1640,65 +1721,131 @@ public:
                             mesh_.collapse(shortest);
                             return true;
                         };
-                        // A cap whose flip is refused (the edge the flip would
-                        // create already exists) is resolved without moving
-                        // anything: the face across the longest edge is
-                        // re-triangulated through the cap's middle vertex, so
-                        // both sides of the seam share it, and the cap itself
-                        // goes. Preconditions are checked first; if adding
-                        // back still fails, the two original faces are
-                        // restored, so the mesh is never left short a face.
-                        auto tryRetriangulate = [&]() {
+
+                        // The cap (A, B, M), M lying on A–B, and the face
+                        // across A–B, (B, A, D). Handing M across — the two
+                        // triangles (B, M, D) and (M, A, D) in place of both —
+                        // removes the cap without moving anything, and is
+                        // what a flip of A–B does. It only helps when the face
+                        // across has area: on a slit seam (a T-junction where
+                        // fillHoles() sealed a loop of collinear vertices) the
+                        // face across is another fill triangle and the flip
+                        // just moves the zero area along (fan.stl cycled
+                        // 8 → 9 → 8 leftovers for ever). So a cap whose
+                        // neighbour is collinear waits: the chain is eaten
+                        // from its ends, where a fill triangle borders the
+                        // real surface, one triangle per pass. The one
+                        // exception is two fill triangles sharing their common
+                        // longest edge, both apexes inside it: neither can
+                        // reach the surface, and flipping to the strictly
+                        // shorter M–D unnests them. Both triangles a fix makes
+                        // are checked for area first, so no fix ever leaves a
+                        // collinear triangle behind.
+                        //
+                        // The edge M–D may already exist. When a face sits on
+                        // exactly {M, B, D} or {A, M, D}, it is the seam where
+                        // two surfaces overlap: that face coincides with half
+                        // of the face across, wound the other way (it shares
+                        // B–M or A–M with the cap and B–D or A–D with the face
+                        // across, so its winding is forced), a zero-thickness
+                        // fold. The cap, the face across and the fold's other
+                        // layer go, and only the missing half is added; the
+                        // fold's edge M–D stays. Nothing moves, no edge is
+                        // left with one face, and the signed volume is
+                        // unchanged (the fold's layers cancelled). The fourth
+                        // vertex loses its last face and goes with the fold.
+                        // If M–D exists but neither half does, another surface
+                        // passes through the face across and the cap is left.
+                        auto resolveCap = [&]() {
                             auto o = mesh_.opposite_halfedge(longest);
                             if (mesh_.is_boundary(o)) return false;
+                            auto across = mesh_.face(o);
+                            if (!across.is_valid() || mesh_.is_deleted(across)) return false;
                             auto A = mesh_.from_vertex(longest), B = mesh_.to_vertex(longest);
                             auto M = mesh_.to_vertex(mesh_.next_halfedge(longest));
                             auto D = mesh_.to_vertex(mesh_.next_halfedge(o));
                             if (M == D || unsafe[A.idx()] || unsafe[B.idx()] || unsafe[M.idx()] || unsafe[D.idx()]) return false;
-                            if (mesh_.find_halfedge(M, D).is_valid()) return false;
-                            auto across = mesh_.face(o);
-                            if (!across.is_valid() || mesh_.is_deleted(across)) return false;
-                            std::vector<pmp::Vertex> acrossRing;
+                            const pmp::Point pA = mesh_.position(A), pB = mesh_.position(B);
+                            const pmp::Point pM = mesh_.position(M), pD = mesh_.position(D);
+                            auto e = mesh_.edge(longest);
+                            if (collinear(across)) {
+                                if (!(pmp::distance(pM, pD) < smax) || !mesh_.is_flip_ok(e)) return false;
+                                // Both triangles the flip makes are collinear
+                                // too; the flip may not turn a float-noise
+                                // sliver into an exact zero the analysis
+                                // would then count (Thingiverse 849726 went
+                                // 0 → 1 that way).
+                                auto exactArea = [&](const pmp::Point& a, const pmp::Point& b, const pmp::Point& c) {
+                                    const pmp::dvec3 da(a[0], a[1], a[2]), db(b[0], b[1], b[2]), dc(c[0], c[1], c[2]);
+                                    const pmp::dvec3 ab = db - da, ac = dc - da;
+                                    return 0.5 * pmp::norm(pmp::cross(ab, ac)) < minArea ? 1 : 0;
+                                };
+                                const int exactBefore = (faceArea(mesh_, f) < minArea ? 1 : 0) + (faceArea(mesh_, across) < minArea ? 1 : 0);
+                                const int exactAfter = exactArea(pM, pD, pA) + exactArea(pM, pB, pD);
+                                if (exactAfter > exactBefore) return false;
+                                mesh_.flip(e);
+                                return true;
+                            }
+                            if (collinearPts(pB, pM, pD) || collinearPts(pM, pA, pD)) return false;
+                            if (!mesh_.find_halfedge(M, D).is_valid()) {
+                                if (!mesh_.is_flip_ok(e)) return false;
+                                mesh_.flip(e);
+                                return true;
+                            }
+                            auto fold = findFace(M, B, D);
+                            std::vector<pmp::Vertex> missing;
+                            pmp::Vertex gone;
+                            if (fold.is_valid() && fold != f && fold != across) { missing = {M, A, D}; gone = B; }
+                            else {
+                                fold = findFace(A, M, D);
+                                if (!fold.is_valid() || fold == f || fold == across) return false;
+                                missing = {B, M, D};
+                                gone = A;
+                            }
+                            for (auto v : missing) {
+                                if (facesAroundExcluding(v, f, across, fold) == 0) return false;
+                            }
+                            std::vector<pmp::Vertex> capRing, acrossRing, foldRing;
+                            for (auto v : mesh_.vertices(f)) capRing.push_back(v);
                             for (auto v : mesh_.vertices(across)) acrossRing.push_back(v);
-                            if (acrossRing.size() != 3) return false;
-                            std::vector<pmp::Vertex> capRing = {A, M, B};
+                            for (auto v : mesh_.vertices(fold)) foldRing.push_back(v);
+                            if (capRing.size() != 3 || acrossRing.size() != 3 || foldRing.size() != 3) return false;
                             mesh_.delete_face(f);
                             mesh_.delete_face(across);
+                            mesh_.delete_face(fold);
                             bool ok = false;
-                            try {
-                                // Across was (B, A, D) in its own winding: keep that
-                                // winding for the two halves.
-                                mesh_.add_face({B, M, D});
-                                mesh_.add_face({M, A, D});
-                                ok = true;
-                            } catch (...) {}
+                            try { mesh_.add_face(missing); ok = true; } catch (...) {}
                             if (!ok) {
-                                // Put things back exactly as they were: drop the
-                                // half that did get added, restore both originals.
+                                // Put the three faces back. The vertex that
+                                // lost its last face was marked deleted by
+                                // delete_face() and cannot carry a face
+                                // again, so it is replaced by a fresh vertex
+                                // at the same position.
                                 try {
-                                    auto half = findFace(B, M, D);
-                                    if (half.is_valid()) mesh_.delete_face(half);
+                                    if (mesh_.is_deleted(gone)) {
+                                        auto fresh = mesh_.add_vertex(mesh_.position(gone));
+                                        for (auto* ring : {&capRing, &acrossRing, &foldRing}) {
+                                            for (auto& v : *ring) if (v == gone) v = fresh;
+                                        }
+                                    }
                                     mesh_.add_face(capRing);
                                     mesh_.add_face(acrossRing);
+                                    mesh_.add_face(foldRing);
                                 } catch (...) {}
                                 return false;
                             }
                             return true;
                         };
-                        auto tryFlip = [&]() {
-                            auto e = mesh_.edge(longest);
-                            if (mesh_.is_boundary(e) || !mesh_.is_flip_ok(e)) return false;
-                            // The flipped edge's endpoints must be manifold too.
-                            auto o = mesh_.opposite_halfedge(longest);
-                            auto a = mesh_.to_vertex(mesh_.next_halfedge(longest));
-                            auto b = mesh_.to_vertex(mesh_.next_halfedge(o));
-                            if (unsafe[a.idx()] || unsafe[b.idx()]) return false;
-                            mesh_.flip(e);
-                            return true;
-                        };
-                        bool fixed;
-                        if (needle) fixed = tryCollapse() || tryFlip() || tryRetriangulate();
-                        else fixed = tryFlip() || tryRetriangulate() || (smin <= tinyMove && tryCollapse());
+                        // A collapse moves a vertex by the length of the
+                        // shortest edge, and every face around it with it:
+                        // collapsing needles with 1–3 unit edges on Thingiverse
+                        // 41086 cost 0.3% of its volume. So a collinear
+                        // triangle, needle or cap, is first handed across its
+                        // longest edge, which moves nothing, and collapsed
+                        // only when the move would be invisible; whatever
+                        // neither can do is left as it was.
+                        bool fixed = resolveCap() || (smin <= tinyMove && tryCollapse());
+                        (void)needle; (void)exact;
                         if (fixed) ++fixedThisPass;
                     }
                     degenRemoved += fixedThisPass;
@@ -2538,7 +2685,7 @@ public:
                     uint8_t flags = 0;
 
                     // 0x01 = degenerate
-                    if (pmp::face_area(mesh_, f) < 1e-10f) {
+                    if (faceArea(mesh_, f) < 1e-10) {
                         flags |= 0x01;
                     }
 
@@ -2657,7 +2804,13 @@ private:
                 auto e2 = pCur - p0;
                 auto crossProduct = cross(e1, e2);
                 totalArea += norm(crossProduct) * 0.5f;
-                totalVolume += static_cast<double>(dot(p0, cross(pPrev, pCur))) / 6.0;
+                // In double from the start: cross(pPrev, pCur) in float on
+                // absolute positions loses |p|² · 2^-24 per face, which on
+                // a 15k-face model 60 units from the origin summed to 0.1%
+                // of the volume and moved by 0.03% when 128 faces were
+                // removed without the geometry changing (Thingiverse 472000).
+                const pmp::dvec3 q0(p0[0], p0[1], p0[2]), q1(pPrev[0], pPrev[1], pPrev[2]), q2(pCur[0], pCur[1], pCur[2]);
+                totalVolume += pmp::dot(q0, pmp::cross(q1, q2)) / 6.0;
                 pPrev = pCur;
             }
         }
@@ -2705,6 +2858,17 @@ private:
 
     // Bounding-box diagonal of the whole model — the scale a boundary loop is
     // judged against in looksDeliberate().
+    // Largest coordinate magnitude in the mesh: what one float ulp of a
+    // position is worth is 2^-23 of this.
+    double coordinateMagnitude() {
+        double m = 0.0;
+        for (auto v : mesh_.vertices()) {
+            const auto& p = mesh_.position(v);
+            for (int i = 0; i < 3; ++i) m = std::max(m, std::fabs(static_cast<double>(p[i])));
+        }
+        return m;
+    }
+
     double meshDiagonal() {
         if (mesh_.n_vertices() == 0) return 0.0;
         pmp::Point lo(std::numeric_limits<float>::max(),

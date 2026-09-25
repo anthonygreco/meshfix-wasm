@@ -361,6 +361,85 @@ describe('repair integrity', () => {
     expect(after.surfaceArea).toBeCloseTo(600, 3);
   });
 
+  it('a slit seam with interleaved vertices on both sides is stitched with no zero-area triangles left', () => {
+    // fan.stl: the bottom face is two triangles meeting on the diagonal,
+    // one side subdivided at t = 0, .2, .4, .6, .8, 1 along it and the other
+    // at t = 0, .3, .7, 1. The seam is an 8-vertex boundary loop with every
+    // vertex on one line, so every triangle fillHoles() can put in it has
+    // zero area (up to float noise: 0, 2^-22, 2^-19 ...). removeDegenerates()
+    // must eat that chain from its ends by handing each middle vertex to the
+    // real face across, never flipping between two fill triangles (that
+    // cycled for ever), and must not move anything.
+    const tris = box({ skip: [0, 1] });
+    const c0: V = [0, 0, 0], c1: V = [10, 0, 0], c2: V = [10, 10, 0], c3: V = [0, 10, 0];
+    const S = [0, 0.2, 0.4, 0.6, 0.8, 1].map((t): V => [10 * t, 10 * t, 0]);
+    const T = [0, 0.3, 0.7, 1].map((t): V => [10 * t, 10 * t, 0]);
+    for (let i = 0; i + 1 < S.length; i++) tris.push([c1, S[i], S[i + 1]]);
+    for (let j = 0; j + 1 < T.length; j++) tris.push([c3, T[j + 1], T[j]]);
+    void c0; void c2;
+    load(tris);
+    const before = analyzer.getAnalysis();
+    expect(before.isWatertight).toBe(false);
+    expect(before.holeCount).toBe(1);
+    analyzer.repair(1e-6, 1e-10, 100);
+    const after = analyzer.getAnalysis();
+    expect(after.isWatertight).toBe(true);
+    expect(after.degenerateTriangleCount).toBe(0);
+    expect(after.connectedComponents).toBe(1);
+    expect(after.volume).toBeCloseTo(1000, 3);
+    expect(after.surfaceArea).toBeCloseTo(600, 3);
+    expect(analyzer.connectivityRebuilds()).toBe(0);
+  });
+
+  it('a zero-area triangle on a fold where two surfaces overlap: the fold goes, the missing half is added, nothing moves', () => {
+    // Bottom face of the box with a pocket glued into a triangular hole
+    // (A, M, D): the face across (B, A, D), a zero-area cap (A, B, M) with M
+    // on A–B, and a fold (M, B, D) that coincides with half of the face
+    // across, wound the other way. B belongs to those three faces only.
+    // The cap cannot be flipped (M–D already exists) and the face across
+    // cannot be split through M (the half (M, B, D) is already there):
+    // the whole pocket is replaced by the one missing half (M, A, D), and
+    // B, which has lost its last face, goes with it.
+    const tris = box({ skip: [0, 1] });
+    const c0: V = [0, 0, 0], c1: V = [10, 0, 0], c2: V = [10, 10, 0], c3: V = [0, 10, 0];
+    const A: V = [6, 6, 0], M: V = [4, 4, 0], B: V = [2, 2, 0], D: V = [6, 2, 0];
+    tris.push([c0, c3, M], [c3, A, M], [c3, c2, A], [c2, D, A], [c2, c1, D], [c0, D, c1], [c0, M, D]);
+    tris.push([B, A, D], [A, B, M], [M, B, D]);
+    load(tris);
+    const before = analyzer.getAnalysis();
+    expect(before.isWatertight).toBe(true);
+    expect(before.degenerateTriangleCount).toBe(1);
+    expect(before.vertexCount).toBe(12);
+    const r = analyzer.repair(1e-6, 1e-10, 100);
+    expect(r.removeDegenerates.degenerateRemoved).toBe(1);
+    const after = analyzer.getAnalysis();
+    expect(after.isWatertight).toBe(true);
+    expect(after.degenerateTriangleCount).toBe(0);
+    expect(after.vertexCount).toBe(11);
+    expect(after.faceCount).toBe(tris.length - 2);
+    expect(after.volume).toBeCloseTo(1000, 3);
+    expect(after.surfaceArea).toBeCloseTo(600, 3);
+    expect(analyzer.connectivityRebuilds()).toBe(0);
+  });
+
+  it('a small part far from the origin has no zero-area triangles and repair leaves it alone', () => {
+    // pmp::face_area() sums cross products of absolute positions in float:
+    // for a 0.003 mm box 64 mm from the origin the terms are ~4000 and the
+    // true area (4.5e-6) is below their rounding, so faces came out with an
+    // area of exactly 0 and were "repaired" (Thingiverse 815482, 73177).
+    const tris = box({ size: 0.003 }).map(t => t.map(([x, y, z]) => [x + 50, y - 40, z + 7] as V) as Tri);
+    load(tris);
+    const before = analyzer.getAnalysis();
+    expect(before.degenerateTriangleCount).toBe(0);
+    const r = analyzer.repair(1e-6, 1e-10, 100);
+    expect(r.removeDegenerates.degenerateRemoved).toBe(0);
+    const after = analyzer.getAnalysis();
+    expect(after.faceCount).toBe(12);
+    expect(after.vertexCount).toBe(8);
+    expect(after.isWatertight).toBe(true);
+    expect(after.degenerateTriangleCount).toBe(0);
+  });
+
   // --- the pipeline as a whole ---------------------------------------------
 
   it('repair never leaves the mesh structurally invalid on any built-in shape', () => {

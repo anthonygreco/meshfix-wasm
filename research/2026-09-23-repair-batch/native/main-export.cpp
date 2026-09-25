@@ -1,0 +1,2 @@
+#include CORE
+int main(int argc, char** argv) { MeshAnalyzer a; a.loadFromFile(argv[1]); a.weldVertices(1e-6f); a.splitVertices(); a.fillHoles(100); a.removeDegenerates(1e-10f); a.fixNormals(); a.exportMesh(argv[2]); auto x = a.getAnalysis(); printf("wt=%d comps=%d holes=%d degen=%d vol=%.2f\n", (int)x.isWatertight, x.connectedComponents, x.holeCount, x.degenerateTriangleCount, x.volume); return 0; }
