@@ -74,6 +74,8 @@ const meshfix = await MeshFixWorker.init(options?);
 | `fixNormals()` | `FixNormalsResult` | Orient inside-out components outward; cavities stay inward |
 | `connectivityRebuilds()` | `number` | Times a repair step had to rebuild an invalid mesh since load (expect 0) |
 | `facesDroppedByAudit()` | `number` | Faces lost to those rebuilds |
+| `nonFiniteFacesRemoved()` | `number` | Triangles dropped at load because a coordinate was NaN or infinite |
+| `colorsDropped()` | `boolean` | Whether the last file loaded carried vertex colours, which are discarded |
 | `reanalyze()` | `{ analysis, issues }` | Re-analyze after modifications |
 | `exportMesh(format?)` | `ArrayBuffer` | Export as `"stl"`, `"obj"`, or `"off"` |
 | `toRenderData()` | `RenderData` | Get vertex/index buffers for 3D rendering |
@@ -106,7 +108,7 @@ The `repair()` method runs these steps in order:
 
 1. **Weld vertices** — merge duplicates within epsilon distance. A no-op on a closed mesh, which has no gap to close.
 2. **Split vertices** — fix non-manifold (bowtie) vertices, including ones PMP's own manifold test cannot see (a second fan the vertex rotation never reaches).
-3. **Fill holes** — close boundary loops with a minimum-weight triangulation. Loops that look like designed openings, or the perimeter of a genuine open shell, are left alone and counted in `holesSkippedAsFeature`; `describeHoles()` explains each, and `fillHoles(maxEdges, true)` fills them anyway.
+3. **Fill holes** — close boundary loops with a minimum-weight triangulation. Loops that look like designed openings, or the perimeter of a genuine open shell, are left alone and counted in `holesSkippedAsFeature`; `describeHoles()` explains each (`HoleInfo.shellDepth` and `shellThickness` are the measurements that separate a solid missing a face, which is filled, from an open shell's rim, which is not), and `fillHoles(maxEdges, true)` fills them anyway. A lone triangle whose edges are all boundary is dropped rather than sealed into a zero-thickness pillow, and counted in `flapsRemoved`.
 4. **Remove degenerates** — drop duplicate faces, and remove zero-area triangles by handing the middle vertex across the longest edge (a flip, or removing a fold where two surfaces overlap), never by deleting the face and never by moving geometry; an edge is collapsed only when it is shorter than 1e-4 of the model, an invisible move. Runs after the fill so the zero-area triangles a slit seam is sealed with get stitched, chain by chain from the ends. Areas are measured in double from edge vectors, so a small part far from the origin is not reported as degenerate.
 5. **Fix normals** — orient inside-out closed components outward. An internal cavity (a closed shell nested inside another) keeps facing inward; folded zero-volume sheets are ignored.
 
