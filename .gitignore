@@ -11,7 +11,6 @@ Makefile
 cmake_install.cmake
 compile_commands.json
 .claude/
-package-lock.json
 .vscode/
 .idea/
 *.swp
